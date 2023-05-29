@@ -1,0 +1,1146 @@
+---
+title: "GLMM_sensitivity"
+author: "Raine Detmer"
+date: "4/6/2023"
+output: html_document
+---
+
+README: code for all the GLMM sensitivity analyses (including Fig. S18-s19)
+
+# packages
+
+```{r}
+library("tidyverse")
+library("lubridate")
+
+library("lme4")
+library("car")
+library("DHARMa")
+
+#for allFit
+library("optimx")
+library("dfoptim")
+
+library("sjPlot")# for random effects qqplot
+
+library("MuMIn")#for calculating AIC weights
+
+library("ncf") # for checking spatial autocorrelation
+
+library(tictoc) # to time how long code takes to run
+
+
+```
+
+# data
+
+```{r}
+# import the intermediate data that was formatted in "format_data.Rmd"
+# benthic transect data
+benthicdt <- read.csv("../../../intermediate_data_output/GLMM_data/benthic_data.csv") %>% dplyr::select(-X)
+
+
+# metapopulation patch
+patchdt <- read.csv("../../../intermediate_data_output/GLMM_data/patch_data.csv") %>% dplyr::select(-X)
+
+```
+
+combine the data and prep for fitting
+```{r}
+# convert connectivity to 1 semester lag (default)
+patchdt1Sfull <- patchdt %>% group_by(patch) %>% mutate_at(c(colnames(patchdt[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# join patch and transect data
+full_datalvals <-left_join(benthicdt, patchdt1Sfull, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# set threshold kelp density separating high and low states (calculated in "format_data.Rmd")
+thresh <- 0.05
+
+#function to log + 1 transform variables
+log1fun <- function(x){
+log_transformed <- log(x+1)
+return(log_transformed)
+}
+
+# log transform all predictor variables, turn kelp density into kelp_status (response variable), and turn all random effects into factors
+full_data_for_mod <- full_datalvals %>% mutate_at(c(colnames(full_datalvals[c(6,15:20)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh, 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id)) # NOTE: using mutate_at doesn't change the names of the columns, even though they are now log transformed
+
+
+```
+
+
+# loss rate
+
+Check sensitivity of GLMM predictions to the value of the loss rate used to calculate patch connectivity (and repeat for the GLMMs fit to the full data and to the dataset with the residual outliers removed)
+
+## full data
+
+
+```{r}
+#loss rates to iterate over (same as used in making patchdt in "format_data.Rmd")
+lvals <- c(0.5, 0.6, 0.7, 0.8, 0.9, 0.99)
+
+
+# make empty list to hold the best-fitting model
+GLMM.list <- vector(mode="list", length=length(lvals))
+
+#make empty matrixe with number of rows = number of models and number of columns = number of loss rates tested
+lvals_aics <- matrix(NaN, nrow = 10, ncol=length(lvals))
+
+#make empty matrix with the coefficients of the best-fitting model
+lvals_coeff <- matrix(NaN, nrow = 5, ncol = length(lvals))#nrow = 5 because max possible fixed effects would be 5 (with an urchin-connectivity interaction)
+
+# make empty matrix with the lower CIs of the best-fitting model 
+lvals_CIlow <- matrix(NaN, nrow = 5, ncol = length(lvals))
+
+# make empty matrix with the upper CIs of the best-fitting model 
+lvals_CIup <- matrix(NaN, nrow = 5, ncol = length(lvals))
+
+for(i in 1:length(lvals)){# for each loss rate
+  
+datalvals2 <- full_data_for_mod# make new dataframe. original has 26 columns, want to add extra column with the conn vals for the ith loss rate
+
+datalvals2[ ,26] <- full_data_for_mod[, 14+i]#add a column with the conn values for the ith loss rate
+
+colnames(datalvals2)[26] <- "patch_conn"#name this column patch_conn; note this is called patch_conn but it is really log transformed (same with urchin_dens and patch_area)
+  
+#fit all the models
+lvals_modf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#null model (no fixed effects)
+
+lvals_modfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#urchins only
+
+lvals_modfC <- glmer(kelp_status ~ patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#connectivity only
+
+lvals_modfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# patch area only
+
+lvals_modfUC <- glmer(kelp_status ~ urchin_dens + patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchins and connectivity
+
+lvals_modfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#urchins and patch area
+
+lvals_modfCA <- glmer(kelp_status ~ patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# connectivity and patch area
+
+lvals_modfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+lvals_modfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchin x connectivity
+
+lvals_modfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchin x connectivity and patch area
+
+#save the AIC values  
+aic_list <- AIC(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)
+
+lvals_aics[,i] <- aic_list$AIC
+
+#save the coefficients for the best fitting model
+coeffs <- c(sapply(list(list(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]), fixef))
+
+lvals_coeff[1:length(coeffs),i] <- coeffs
+
+# save best fitting model
+best_mod <- list(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]
+
+GLMM.list[[i]] <- best_mod
+
+# save the confidence intervals for the coefficients of the best fitting model
+# getting confidence intervals (Wald CIs = faster but less accurate way): https://stackoverflow.com/questions/26417005/odds-ratio-and-confidence-intervals-from-glmer-output
+# note could also use sjPlot::get_model_data(GLMM.list2[[5]], type = "est") to get the CIs, these are exponentiated to give the odds ratios but if log transformed to the log-odds scale they give very similar/same answers
+#confint(GLMM.list[[5]],parm="beta_",method="Wald")
+#confint(GLMM.list[[5]],parm="beta_",method="Wald")[4,2]# [i,j]: i = 1 for intercept, 2 for urchins, 3 for conn, 4 for area; j = 1 for lower CI and 2 for upper
+lvals_CIlow[1:length(coeffs),i] <- confint(GLMM.list[[i]],parm="beta_",method="Wald")[ ,1]
+
+lvals_CIup[1:length(coeffs),i] <- confint(GLMM.list[[i]],parm="beta_",method="Wald")[ ,2]
+  
+}
+
+
+```
+
+
+## no outliers
+
+```{r}
+
+# make empty list to hold the best-fitting model
+GLMM.list2 <- vector(mode="list", length=length(lvals))
+
+#make empty matrix with number of rows = number of models and number of columns = number of loss rates tested
+lvals_aics2 <- matrix(NaN, nrow = 10, ncol=length(lvals))
+
+#make empty matrix with the coefficients of the best-fitting model
+lvals_coeff2 <- matrix(NaN, nrow = 5, ncol = length(lvals))
+
+# make empty matrix with the lower CIs of the best-fitting model 
+lvals_CIlow2 <- matrix(NaN, nrow = 5, ncol = length(lvals))
+
+# make empty matrix with the upper CIs of the best-fitting model 
+lvals_CIup2 <- matrix(NaN, nrow = 5, ncol = length(lvals))
+
+for(i in 1:length(lvals)){# for each loss rate
+  
+datalvals2 <- full_data_for_mod[c(-144, -176, -177,- 179),]# make new dataframe. original has 25 columns, want to add extra column with the conn vals for the ith loss rate
+
+datalvals2[ ,26] <- full_data_for_mod[c(-144, -176, -177,- 179), 14+i]#add a column with the conn values for the ith loss rate
+
+colnames(datalvals2)[26] <- "patch_conn"#name this column patch_conn; note this is called patch_conn but it is really log transformed (same with urchin_dens and patch_area)
+  
+#fit all the models
+lvals_modf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#null model (no fixed effects)
+
+lvals_modfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#urchins only
+
+lvals_modfC <- glmer(kelp_status ~ patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#connectivity only
+
+lvals_modfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# patch area only
+
+lvals_modfUC <- glmer(kelp_status ~ urchin_dens + patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchins and connectivity
+
+lvals_modfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))#urchins and patch area
+
+lvals_modfCA <- glmer(kelp_status ~ patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# connectivity and patch area
+
+lvals_modfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit)) #urchins, connectivity, and patch area 
+
+lvals_modfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchin x connectivity
+
+lvals_modfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals2, family = binomial(link=logit))# urchin x connectivity and patch area
+
+#save the AIC values  
+aic_list <- AIC(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)
+
+lvals_aics2[,i] <- aic_list$AIC
+
+#save the coefficients for the best fitting model
+coeffs <- c(sapply(list(list(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]), fixef))
+
+lvals_coeff2[1:length(coeffs),i] <- coeffs
+
+# save best fitting model
+best_mod <- list(lvals_modf0, lvals_modfU, lvals_modfC, lvals_modfA, lvals_modfUC, lvals_modfUA, lvals_modfCA, lvals_modfUCA, lvals_modfUxC, lvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]
+
+GLMM.list2[[i]] <- best_mod
+
+# save the confidence intervals for the coefficients of the best fitting model
+lvals_CIlow2[1:length(coeffs),i] <- confint(GLMM.list2[[i]],parm="beta_",method="Wald")[ ,1]
+
+lvals_CIup2[1:length(coeffs),i] <- confint(GLMM.list2[[i]],parm="beta_",method="Wald")[ ,2]
+  
+}
+
+```
+
+```{r}
+
+# check the difference between the UCA and UxCA for loss rate = 0.99
+#lvals_aics2[8,6] - lvals_aics2[10,6]
+
+# difference is very small: 0.6
+
+# change the GLMM model for loss rate = 0.99 from UxCA to UCA so the sensitivity plots shown below are all for the same model (UCA)
+#summary(GLMM.list2[[6]])
+
+# get the data needed
+datalvals0.99.no <- full_data_for_mod[c(-144, -176, -177,- 179),]# make new dataframe
+
+datalvals0.99.no[ ,26] <- full_data_for_mod[c(-144, -176, -177,- 179), 14+6]#add a column with the conn values for the ith loss rate (here i = 6 = loss rate of 0.99)
+
+colnames(datalvals0.99.no)[26] <- "patch_conn"#name this column patch_conn; note this is called patch_conn but it is really log transformed 
+  
+# fit the model
+lvals_modfUCA0.99.no <- glmer(kelp_status ~ urchin_dens + patch_conn + patch_area  + (1|transect_id) + (1|fyear), data=datalvals0.99.no, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+# make a new list of coefficients
+lvals_coeff2.2 <- lvals_coeff2
+lvals_coeff2.2[1:4 ,6] <- sapply(list(lvals_modfUCA0.99.no), fixef)
+# replace the 5th one (for the interaction term) with NA
+lvals_coeff2.2[5 ,6] <- NA
+
+# make new list of fitted GLMM models without outliers
+GLMM.list2.2 <- GLMM.list2
+
+# change the last model (for loss rate = 0.99) to lvals_modfUCA0.99.no
+GLMM.list2.2[[6]] <- lvals_modfUCA0.99.no
+
+# change the confidence intervals
+lvals_CIlow2.2 <- lvals_CIlow2
+lvals_CIlow2.2[1:4,6] <- confint(GLMM.list2.2[[6]],parm="beta_",method="Wald")[ ,1]
+lvals_CIlow2.2[5,6] <- NA
+
+lvals_CIup2.2 <- lvals_CIup2
+lvals_CIup2.2[1:4,6] <- confint(GLMM.list2.2[[6]],parm="beta_",method="Wald")[ ,2]
+lvals_CIup2.2[5,6] <- NA
+
+
+```
+
+
+
+## Fig S18
+
+sensitivity of GLMM estimates to loss rate
+
+
+```{r}
+
+#layout(matrix(c(1, 3, 2, 4, 5, 5), nrow = 2, ncol = 3), widths = c(1, 1, 0.25), heights =rep.int(1, 2))
+#layout.show(5)
+
+pdf("Lossrates.pdf", height = 5)
+par(mfrow = c(2, 3), oma = c(3, 2, 2, 2))
+layout(matrix(c(1, 3, 2, 4, 5, 5), nrow = 2, ncol = 3), widths = c(1, 1, 0.25), heights =rep.int(1, 2))
+par(mai=c(0.25,0.55,0.1,0.01))
+# full data
+plot(x = lvals, y = lvals_coeff[2,], type = "l", xlab = NA, ylab = NA, ylim = c(-2.5, 2.4), col = "orchid", las = 1, xaxt = "n")#ylim = c(-2, 1.3)
+axis(side = 1, at = c(0.5, 0.6, 0.7, 0.8, 0.9, 1), labels = NA)
+lines(x = lvals, y = lvals_coeff[3,], col = "orange")
+lines(x = lvals, y = lvals_coeff[4,], col = "green")
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow[2,], rev(lvals_CIup[2,])), col = adjustcolor("orchid", alpha.f = 0.2), border = NA)
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow[3,], rev(lvals_CIup[3,])), col = adjustcolor("orange", alpha.f = 0.2), border = NA)
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow[4,], rev(lvals_CIup[4,])), col = adjustcolor("green", alpha.f = 0.2), border = NA)
+mtext(side = 3, "a) GLMM coefficients, full data", adj = 0)
+mtext(side = 2, "Coefficient", cex = 1, line = 2.5)
+legend("bottomleft", legend = c("urchins", "patch connectivity", "patch area"), col=c("orchid", "orange", "green"), lwd=2, bty = "n", ncol = 2)
+abline(h = 0, lty=2)
+#c("#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+
+plot(x = lvals, y = lvals_aics[1,], type = "l", xlab = NA, ylab = NA, ylim = c(255, 340), col = "#E69F00", las = 1, xaxt = "n")
+axis(side = 1, at = c(0.5, 0.6, 0.7, 0.8, 0.9, 1), labels = NA)
+lines(x = lvals, y = lvals_aics[2,], col = "#56B4E9", lty=1)
+lines(x = lvals, y = lvals_aics[3,], col = "#56B4E9", lty=2)
+lines(x = lvals, y = lvals_aics[4,], col = "#56B4E9", lty=3)
+lines(x = lvals, y = lvals_aics[5,], col = "#D55E00", lty=1)
+lines(x = lvals, y = lvals_aics[6,], col = "#D55E00", lty=2)
+lines(x = lvals, y = lvals_aics[7,], col = "#D55E00", lty=3)
+lines(x = lvals, y = lvals_aics[8,], col = "#000000", lty=1)
+lines(x = lvals, y = lvals_aics[9,], col = "#CC79A7", lty=2)
+lines(x = lvals, y = lvals_aics[10,], col = "#CC79A7", lty=3)
+mtext(side = 2, "AIC", cex = 1, line = 2.5)
+mtext(side = 3, "c) GLMM AICs, full data", adj = 0)
+#legend(x=1, y=330, legend = c("0", "U", "C", "A", "UC", "UA", "CA", "UCA", "UxC", "UxCA"), col=c("#E69F00", "#56B4E9", "#56B4E9", "#56B4E9","#D55E00", "#D55E00", "#D55E00", "#000000", "#CC79A7","#CC79A7"), lty=c(1, 1, 2, 3, 1, 2, 3, 1, 2,3), bty="n", lwd=2, title="model", xpd=TRUE)
+#need to move legend outside plot
+
+# no outliers
+plot(x = lvals, y = lvals_coeff2.2[2,], type = "l", xlab = NA, ylab = NA, ylim = c(-2.5, 2.4), col = "orchid", las = 1)
+lines(x = lvals, y = lvals_coeff2.2[3,], col = "orange")
+lines(x = lvals, y = lvals_coeff2.2[4,], col = "green")
+#lines(x = lvals, y = lvals_coeff2.2[5,], col = "black")
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow2.2[2,], rev(lvals_CIup2.2[2,])), col = adjustcolor("orchid", alpha.f = 0.2), border = NA)
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow2.2[3,], rev(lvals_CIup2.2[3,])), col = adjustcolor("orange", alpha.f = 0.2), border = NA)
+polygon(x = c(lvals, rev(lvals)), y = c(lvals_CIlow2.2[4,], rev(lvals_CIup2.2[4,])), col = adjustcolor("green", alpha.f = 0.2), border = NA)
+#legend(x=0.85, y = -0.25, legend = c("urchins", "connectivity", "patch area"), col=c("orchid", "orange", "green"), bty="n", lwd=2)
+abline(h = 0, lty=2)
+mtext(side = 3, "b) GLMM coefficients, no outliers", adj = 0)
+mtext(side = 2, "Coefficient", cex = 1, line = 2.5)
+mtext(side = 1, expression("Loss rate ("*d^-1*")"), cex = 1, line = 2.5)
+
+#c("#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+
+#par(mar=c(5.1, 4.1, 4.1, 8.1))
+plot(x = lvals, y = lvals_aics2[1,], type = "l", xlab = NA, ylab = NA, ylim = c(220, 310), col = "#E69F00", las =1)
+lines(x = lvals, y = lvals_aics2[2,], col = "#56B4E9", lty=1)
+lines(x = lvals, y = lvals_aics2[3,], col = "#56B4E9", lty=2)
+lines(x = lvals, y = lvals_aics2[4,], col = "#56B4E9", lty=3)
+lines(x = lvals, y = lvals_aics2[5,], col = "#D55E00", lty=1)
+lines(x = lvals, y = lvals_aics2[6,], col = "#D55E00", lty=2)
+lines(x = lvals, y = lvals_aics2[7,], col = "#D55E00", lty=3)
+lines(x = lvals, y = lvals_aics2[8,], col = "#000000", lty=1)
+lines(x = lvals, y = lvals_aics2[9,], col = "#CC79A7", lty=2)
+lines(x = lvals, y = lvals_aics2[10,], col = "#CC79A7", lty=3)
+mtext(side = 3, "d) GLMM AICs, no outliers", adj = 0)
+mtext(side = 2, "AIC", cex = 1, line = 2.5)
+mtext(side = 1, expression("Loss rate ("*d^-1*")"), cex = 1, line = 2.5)
+#legend(x=1, y=300, legend = c("0", "U", "C", "A", "UC", "UA", "CA", "UCA", "UxC", "UxCA"), col=c("#E69F00", "#56B4E9", "#56B4E9", "#56B4E9","#D55E00", "#D55E00", "#D55E00", "#000000", "#CC79A7","#CC79A7"), lty=c(1, 1, 2, 3, 1, 2, 3, 1, 2,3), bty="n", lwd=2, title="Model", xpd=TRUE)
+
+# blank plot
+plot(0,type='n',axes=FALSE, ann = FALSE)# empty plot
+legend(x= -2.7, y = 1, legend = c("0", "U", "C", "A", "UC", "UA", "CA", "UCA", "UxC", "UxCA"), col=c("#E69F00", "#56B4E9", "#56B4E9", "#56B4E9","#D55E00", "#D55E00", "#D55E00", "#000000", "#CC79A7","#CC79A7"), lty=c(1, 1, 2, 3, 1, 2, 3, 1, 2,3), lwd=2, title="Model" , xpd=TRUE) #, xpd=TRUE
+dev.off()
+
+```
+
+# threshold
+
+check the sensitivity of the GLMM results to the value of the threshold for the high kelp state, repeat for the GLMMs fit to the full data and to the dataset with the residual outliers removed
+
+## full data
+
+```{r}
+
+# go from 10% to 25% quantile of kelp density (sequence of threshold values to test were calculated in "format_data.Rmd")
+thresh_set <- c(0.0375, 0.05, 0.0875, 0.1125)
+
+#make empty matrix with number of rows = number of models and number of columns = number of threshold values tested
+thvals_aics <- matrix(NaN, nrow = 10, ncol=length(thresh_set))
+
+#make empty matrix with the coefficients of the best-fitting model
+thvals_coeff <- matrix(NaN, nrow = 5, ncol = length(thresh_set))#nrow = 5 because max possible coefficients would be 5 (if best model was UxCA)
+
+# make empty matrix with the lower CIs of the best-fitting model 
+thvals_CIlow <- matrix(NaN, nrow = 5, ncol = length(thresh_set))
+
+# make empty matrix with the upper CIs of the best-fitting model 
+thvals_CIup <- matrix(NaN, nrow = 5, ncol = length(thresh_set))
+
+
+# default threshold value (calculated in "format_data.Rmd")
+thresh <- 0.05
+
+
+# starting data
+full_datalvalsth <- left_join(benthicdt, patchdt1Sfull, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)%>% select(-patch_conn0.5, -patch_conn0.6, -patch_conn0.7, -patch_conn0.8, -patch_conn0.99)
+
+#View(full_datalvalsth)
+
+
+for(i in 1:length(thresh_set)){
+  
+  # get the data frame
+
+full_data_for_modth <- full_datalvalsth %>% mutate_at(c(colnames(full_datalvalsth[c(6,15)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh_set[i], 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id))
+
+
+#fit all the models
+thvals_modf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#null model (no fixed effects)
+
+thvals_modfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#urchins only
+
+thvals_modfC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#connectivity only
+
+thvals_modfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# patch area only
+
+thvals_modfUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchins and connectivity
+
+thvals_modfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#urchins and patch area
+
+thvals_modfCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# connectivity and patch area
+
+thvals_modfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+thvals_modfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchin x connectivity
+
+thvals_modfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchin x connectivity and patch area
+
+#save the AIC values  
+aic_list <- AIC(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)
+
+thvals_aics[,i] <- aic_list$AIC
+
+#save the coefficients for the best fitting model
+coeffs <- c(sapply(list(list(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]), fixef))
+
+thvals_coeff[1:length(coeffs),i] <- coeffs
+
+best_mod <- list(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]
+
+# save the confidence intervals for the coefficients of the best fitting model
+thvals_CIlow[1:length(coeffs),i] <- confint(best_mod,parm="beta_",method="Wald")[ ,1]
+
+thvals_CIup[1:length(coeffs),i] <- confint(best_mod,parm="beta_",method="Wald")[ ,2]
+
+  
+}
+
+
+
+```
+
+
+```{r}
+#check the best-fitting model didn't change
+which.min <- rep(NaN, length = length(thresh_set))
+
+for(i in 1:length(thresh_set)){
+  
+  which.min[i] <- which(thvals_aics[ ,i]==min(thvals_aics[,i]))
+}
+
+
+which.min# all model 8 = UCA model
+
+
+```
+
+## no outliers
+
+```{r}
+
+# go from 10% to 25% quantile
+#thresh_set <- c(0.0375, 0.05, 0.0875, 0.1125)
+
+#make empty matrix with number of rows = number of models and number of columns = number of threshold values tested
+thvals_aics2 <- matrix(NaN, nrow = 10, ncol=length(thresh_set))
+
+#make empty matrix with the coefficients of the best-fitting model
+thvals_coeff2 <- matrix(NaN, nrow = 5, ncol = length(thresh_set))
+
+# make empty matrix with the lower CIs of the best-fitting model 
+thvals_CIlow2 <- matrix(NaN, nrow = 5, ncol = length(thresh_set))
+
+# make empty matrix with the upper CIs of the best-fitting model 
+thvals_CIup2 <- matrix(NaN, nrow = 5, ncol = length(thresh_set))
+
+
+for(i in 1:length(thresh_set)){
+  
+  # get the data frame
+
+full_data_for_modth <- full_datalvalsth %>% mutate_at(c(colnames(full_datalvalsth[c(6,15)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh_set[i], 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id))
+
+# remove the outliers
+# first check order is the same
+#which(full_data_for_modth$urchin_dens-datalvals0.9$urchin_dens !=0)
+full_data_for_modth <- full_data_for_modth[c(-144, -176, -177,- 179),] # can remove the same rows
+
+
+#fit all the models
+thvals_modf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#null model (no fixed effects)
+
+thvals_modfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#urchins only
+
+thvals_modfC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#connectivity only
+
+thvals_modfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# patch area only
+
+thvals_modfUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchins and connectivity
+
+thvals_modfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))#urchins and patch area
+
+thvals_modfCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# connectivity and patch area
+
+thvals_modfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+thvals_modfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchin x connectivity
+
+thvals_modfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_modth, family = binomial(link=logit))# urchin x connectivity and patch area
+
+#save the AIC values  
+aic_list <- AIC(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)
+
+thvals_aics2[,i] <- aic_list$AIC
+
+#save the coefficients for the best fitting model
+coeffs <- c(sapply(list(list(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]), fixef))
+
+thvals_coeff2[1:length(coeffs),i] <- coeffs
+
+best_mod <- list(thvals_modf0, thvals_modfU, thvals_modfC, thvals_modfA, thvals_modfUC, thvals_modfUA, thvals_modfCA, thvals_modfUCA, thvals_modfUxC, thvals_modfUxCA)[[which(aic_list$AIC==min(aic_list$AIC))]]
+
+# save the confidence intervals for the coefficients of the best fitting model
+thvals_CIlow2[1:length(coeffs),i] <- confint(best_mod,parm="beta_",method="Wald")[ ,1]
+
+thvals_CIup2[1:length(coeffs),i] <- confint(best_mod,parm="beta_",method="Wald")[ ,2]
+
+  
+}
+
+
+
+
+```
+
+```{r}
+#check the best-fitting model didn't change
+which.min <- rep(NaN, length = length(thresh_set))
+
+for(i in 1:length(thresh_set)){
+  
+  which.min[i] <- which(thvals_aics[ ,i]==min(thvals_aics[,i]))
+}
+
+
+which.min# all model 8 = UCA model
+
+
+```
+
+## Fig S19
+
+plot effect of kelp state threshold on GLMM estimates
+
+```{r}
+
+
+pdf("Threshold.pdf", height = 4)
+par(mfrow = c(1, 2), oma = c(3, 2, 2, 2))
+par(mai=c(0.25,0.5,0.1,0.01))
+plot(x = thresh_set, y = thvals_coeff[2,], ylim = c(-2.5, 2.25),type = "l", xlab = NA, ylab = NA, col = "orchid", yaxt = "n", las = 1)#ylim = c(-2, 1.5)
+#axis(side = 1, at = c(0.04, 0.06, 0.08, 0.1), labels = NA)
+axis(side = 2, at = c(-2, -1, 0,1, 2), las = 1)
+lines(x = thresh_set, y = thvals_coeff[3,], col = "orange")
+lines(x = thresh_set, y = thvals_coeff[4,], col = "green")
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow[2,], rev(thvals_CIup[2,])), col = adjustcolor("orchid", alpha.f = 0.2), border = NA)
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow[3,], rev(thvals_CIup[3,])), col = adjustcolor("orange", alpha.f = 0.2), border = NA)
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow[4,], rev(thvals_CIup[4,])), col = adjustcolor("green", alpha.f = 0.2), border = NA)
+mtext(side = 2, "Coefficient", line = 2.5)
+mtext(side = 1, "Threshold for high kelp state", line = 2.5)
+mtext(side = 3, "a) GLMM coefficients, full data", adj = 0)
+legend("bottomright", legend = c("urchins", "patch connectivity", "patch area"), col=c("orchid", "orange", "green"), bty="n", lwd=2)
+abline(h=0, lty=2)
+
+plot(x = thresh_set, y = thvals_coeff2[2,], ylim = c(-2.5, 2.25),type = "l", xlab = NA, ylab = NA, col = "orchid", yaxt = "n")
+lines(x = thresh_set, y = thvals_coeff2[3,], col = "orange")
+lines(x = thresh_set, y = thvals_coeff2[4,], col = "green")
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow2[2,], rev(thvals_CIup2[2,])), col = adjustcolor("orchid", alpha.f = 0.2), border = NA)
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow2[3,], rev(thvals_CIup2[3,])), col = adjustcolor("orange", alpha.f = 0.2), border = NA)
+polygon(x = c(thresh_set, rev(thresh_set)), y = c(thvals_CIlow2[4,], rev(thvals_CIup2[4,])), col = adjustcolor("green", alpha.f = 0.2), border = NA)
+axis(side = 2, at = c(-2, -1, 0, 1, 2), labels = NA, las = 1)
+mtext(side = 3, "b) GLMM coefficients, no outliers", adj = 0)
+#mtext(side = 2, "Coefficient", line = 2.5)
+mtext(side = 1, "Threshold for high kelp state", line = 2.5)
+#legend(x=0.038, y = 0, legend = c("urchins", "connectivity", "patch area"), col=c("black", "red", "blue"), bty="n", lwd=2)
+abline(h=0, lty=2)
+dev.off()
+
+```
+
+# lag time
+
+check the sensitivity of the GLMM results to the lag in patch connectivity
+
+## full data
+
+### 2 semester lag
+
+use patch connectivity from 2 semesters prior to the semester in which kelp and urchin densities were recorded
+
+```{r}
+#View(connvals)
+
+# convert connectivity to 2 sem lag 
+patchdt2S <- patchdt%>% select(-patch_conn0.5, -patch_conn0.6, -patch_conn0.7, -patch_conn0.8, -patch_conn0.99) %>% mutate(patch_conn0.9= lag(patch_conn0.9,n=2L, default = NA, order_by = year.sem)) %>% ungroup()  #%>% group_by(patch) %>% mutate_at(c(colnames(patchdt[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# join with the benthic transect data
+full_datalvals2S <-left_join(benthicdt, patchdt2S, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# log transform predictor variables and turn kelp density into kelp state, turn random effects into factors
+full_data_for_mod2S <- full_datalvals2S %>% mutate_at(c(colnames(full_datalvals2S[c(6,15)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh, 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id)) 
+
+
+
+```
+
+
+random effects selection
+
+```{r}
+
+mod2Sr3 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit)) 
+
+summary(mod2Sr3) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod2Sr2 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod2Sr3, mod2Sr2), logLik)
+sapply(list(mod2Sr3, mod2Sr2), fixef)
+sapply(list(mod2Sr3, mod2Sr2), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod2Sf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))#null model (no fixed effects)
+
+mod2SfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))#urchins only
+
+mod2SfC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))#connectivity only
+
+mod2SfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))# patch area only
+
+mod2SfUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))# urchins and connectivity
+
+mod2SfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))#urchins and patch area
+
+mod2SfCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))# connectivity and patch area
+
+mod2SfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod2SfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))# urchin x connectivity
+
+mod2SfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2S, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod2S_AICs <- AIC(mod2Sf0, mod2SfU, mod2SfC, mod2SfA, mod2SfUC, mod2SfUA, mod2SfCA, mod2SfUCA, mod2SfUxC, mod2SfUxCA)
+
+#get the delta AIC values
+mod2S_deltas <- deltaAIC.fun(mod2S_AICs[, 2], min(mod2S_AICs[, 2]))
+
+#get the weights
+mod2S_weights <- as.vector(round(Weights(mod2S_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod2S_AICs$delta <- mod2S_deltas
+mod2S_AICs$weights <- mod2S_weights
+
+mod2S_AICs <- mod2S_AICs[order(mod2S_AICs$AIC), ] 
+
+```
+
+### 1 semester lag
+
+use patch connectivity from 1 semester prior to the semester in which kelp and urchin densities were recorded
+
+```{r}
+
+# convert patch connectivity to 1 sem lag 
+patchdt1S <- patchdt%>% select(-patch_conn0.5, -patch_conn0.6, -patch_conn0.7, -patch_conn0.8, -patch_conn0.99) %>% mutate(patch_conn0.9= lag(patch_conn0.9,n=1L, default = NA, order_by = year.sem)) %>% ungroup()  #%>% group_by(patch) %>% mutate_at(c(colnames(patchdt[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# join with the benthic transect data
+full_datalvals1S <-left_join(benthicdt, patchdt1S, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# log transform predictor variables and turn kelp density into kelp state, turn random effects into factors
+# also filter out just the observations that are also in the 2 semester lag data set (since you can't compare AICs of models fit to different numbers of observations)
+full_data_for_mod1S <- full_datalvals1S %>% mutate_at(c(colnames(full_datalvals1S[c(6,15)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh, 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id)) %>% rename(patch_conn0.9.1 = patch_conn0.9) %>% right_join(full_data_for_mod2S, by = c("surv_date.u", "site_id", "transect_id", "site_name", "site.trans", "urchin_dens", "surv_area.u", "year", "semester", "year.sem", "surv_date.k", "kelp_dens", "surv_area.k", "patch", "patch_area", "patch_biomass", "patch_area_m2", "kelp_status", "fyear")) %>% select(-patch_conn0.9) %>% rename(patch_conn0.9=patch_conn0.9.1) 
+
+
+```
+
+
+random effects selection
+```{r}
+
+mod1Sr3 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))  # failed to converge
+
+#summary(mod1Sr3) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod1Sr2 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod1Sr3, mod1Sr2), logLik)
+sapply(list(mod1Sr3, mod1Sr2), fixef)
+sapply(list(mod1Sr3, mod1Sr2), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod1Sf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))#null model (no fixed effects)
+
+mod1SfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))#urchins only
+
+mod1SfC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))#connectivity only
+
+mod1SfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))# patch area only
+
+mod1SfUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))# urchins and connectivity
+
+mod1SfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))#urchins and patch area
+
+mod1SfCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))# connectivity and patch area
+
+mod1SfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod1SfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))# urchin x connectivity
+
+mod1SfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1S, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod1S_AICs <- AIC(mod1Sf0, mod1SfU, mod1SfC, mod1SfA, mod1SfUC, mod1SfUA, mod1SfCA, mod1SfUCA, mod1SfUxC, mod1SfUxCA)
+
+#get the delta AIC values
+mod1S_deltas <- deltaAIC.fun(mod1S_AICs[, 2], min(mod1S_AICs[, 2]))
+
+#get the weights
+mod1S_weights <- as.vector(round(Weights(mod1S_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod1S_AICs$delta <- mod1S_deltas
+mod1S_AICs$weights <- mod1S_weights
+
+mod1S_AICs <- mod1S_AICs[order(mod1S_AICs$AIC), ] 
+
+
+```
+
+### 0 semester lag
+
+use patch connectivity from the same semester in which kelp and urchin densities were recorded
+
+```{r}
+
+# select connectivity with loss rate = 0.9, no lags
+patchdt0S <- patchdt%>% select(-patch_conn0.5, -patch_conn0.6, -patch_conn0.7, -patch_conn0.8, -patch_conn0.99) 
+
+# join with the benthic transect data
+full_datalvals0S <-left_join(benthicdt, patchdt0S, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# log transform predictor variables and turn kelp density into kelp state, turn random effects into factors
+# also filter out just the observations that are also in the 2 semester lag data set (since you can't compare AICs of models fit to different numbers of observations)
+full_data_for_mod0S <- full_datalvals0S %>% mutate_at(c(colnames(full_datalvals0S[c(6,15)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh, 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id)) %>% rename(patch_conn0.9.1 = patch_conn0.9) %>% right_join(full_data_for_mod2S, by = c("surv_date.u", "site_id", "transect_id", "site_name", "site.trans", "urchin_dens", "surv_area.u", "year", "semester", "year.sem", "surv_date.k", "kelp_dens", "surv_area.k", "patch", "patch_area", "patch_biomass", "patch_area_m2", "kelp_status", "fyear")) %>% select(-patch_conn0.9) %>% rename(patch_conn0.9=patch_conn0.9.1) 
+
+
+```
+
+random effects selection
+```{r}
+
+mod0Sr3 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))  # failed to converge
+
+#summary(mod0Sr3) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod0Sr2 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod0Sr3, mod0Sr2), logLik)
+sapply(list(mod0Sr3, mod0Sr2), fixef)
+sapply(list(mod0Sr3, mod0Sr2), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod0Sf0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))#null model (no fixed effects)
+
+mod0SfU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))#urchins only
+
+mod0SfC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))#connectivity only
+
+mod0SfA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))# patch area only
+
+mod0SfUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))# urchins and connectivity
+
+mod0SfUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))#urchins and patch area
+
+mod0SfCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))# connectivity and patch area
+
+mod0SfUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod0SfUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))# urchin x connectivity
+
+mod0SfUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0S, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod0S_AICs <- AIC(mod0Sf0, mod0SfU, mod0SfC, mod0SfA, mod0SfUC, mod0SfUA, mod0SfCA, mod0SfUCA, mod0SfUxC, mod0SfUxCA)
+
+#get the delta AIC values
+mod0S_deltas <- deltaAIC.fun(mod0S_AICs[, 2], min(mod0S_AICs[, 2]))
+
+#get the weights
+mod0S_weights <- as.vector(round(Weights(mod0S_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod0S_AICs$delta <- mod0S_deltas
+mod0S_AICs$weights <- mod0S_weights
+
+mod0S_AICs <- mod0S_AICs[order(mod0S_AICs$AIC), ] 
+
+#mod0S_AICs
+
+
+```
+
+
+### compare
+
+```{r}
+
+# compare the AICs of the best model for each version of connectivity
+mod2S_AICs[which(mod2S_AICs[,2]==min(mod2S_AICs[,2])), 2]
+mod1S_AICs[which(mod1S_AICs[,2]==min(mod1S_AICs[,2])), 2]
+mod0S_AICs[which(mod0S_AICs[,2]==min(mod0S_AICs[,2])), 2]
+
+# one semester lag has the lowest AIC
+
+```
+
+
+## no outliers
+
+repeat all of the above for the dataset with the residual outliers removed
+
+### 2 semester lag
+
+```{r}
+
+# remove the outliers
+full_data_for_mod[c(144, 176, 177,179),]
+
+# check the indexes didn't change
+which(full_data_for_mod2S$site.trans==full_data_for_mod$site.trans[144] & full_data_for_mod2S$year.sem==full_data_for_mod$year.sem[144])
+which(full_data_for_mod2S$site.trans==full_data_for_mod$site.trans[176] & full_data_for_mod2S$year.sem==full_data_for_mod$year.sem[176])
+which(full_data_for_mod2S$site.trans==full_data_for_mod$site.trans[177] & full_data_for_mod2S$year.sem==full_data_for_mod$year.sem[177])
+which(full_data_for_mod2S$site.trans==full_data_for_mod$site.trans[179] & full_data_for_mod2S$year.sem==full_data_for_mod$year.sem[179])
+# all are the same (because the lter data are first in the data set and they aren't affected by the longer lag time since they started much later than the connectivity data)
+
+full_data_for_mod2Sno <- full_data_for_mod2S[c(-144, -176, -177,-179),]
+
+```
+
+
+random effects selection
+
+```{r}
+
+mod2Sr3no <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit)) 
+
+#summary(mod2Sr3no) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod2Sr2no <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod2Sr3no, mod2Sr2no), logLik)
+sapply(list(mod2Sr3no, mod2Sr2no), fixef)
+sapply(list(mod2Sr3no, mod2Sr2no), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod2Snof0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))#null model (no fixed effects)
+
+mod2SnofU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))#urchins only
+
+mod2SnofC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))#connectivity only
+
+mod2SnofA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))# patch area only
+
+mod2SnofUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))# urchins and connectivity
+
+mod2SnofUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))#urchins and patch area
+
+mod2SnofCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))# connectivity and patch area
+
+mod2SnofUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod2SnofUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))# urchin x connectivity
+
+mod2SnofUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod2Sno, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod2Sno_AICs <- AIC(mod2Sf0, mod2SfU, mod2SfC, mod2SfA, mod2SfUC, mod2SfUA, mod2SfCA, mod2SfUCA, mod2SfUxC, mod2SfUxCA)
+
+
+#get the delta AIC values
+mod2Sno_deltas <- deltaAIC.fun(mod2Sno_AICs[, 2], min(mod2Sno_AICs[, 2]))
+
+#get the weights
+mod2Sno_weights <- as.vector(round(Weights(mod2Sno_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod2Sno_AICs$delta <- mod2Sno_deltas
+mod2Sno_AICs$weights <- mod2Sno_weights
+
+mod2Sno_AICs <- mod2Sno_AICs[order(mod2Sno_AICs$AIC), ] 
+
+#mod2Sno_AICs
+
+
+```
+
+### 1 semester lag
+
+```{r}
+# check the indexes for the outliers didn't change
+which(full_data_for_mod1S$site.trans==full_data_for_mod$site.trans[144] & full_data_for_mod1S$year.sem==full_data_for_mod$year.sem[144])
+which(full_data_for_mod1S$site.trans==full_data_for_mod$site.trans[176] & full_data_for_mod1S$year.sem==full_data_for_mod$year.sem[176])
+which(full_data_for_mod1S$site.trans==full_data_for_mod$site.trans[177] & full_data_for_mod1S$year.sem==full_data_for_mod$year.sem[177])
+which(full_data_for_mod1S$site.trans==full_data_for_mod$site.trans[179] & full_data_for_mod1S$year.sem==full_data_for_mod$year.sem[179])
+# all are the same 
+
+full_data_for_mod1Sno <- full_data_for_mod1S[c(-144, -176, -177,-179),] 
+
+```
+
+
+random effects selection
+```{r}
+
+mod1Snor3 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))  # failed to converge
+
+#summary(mod1Snor3) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod1Snor2 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod1Snor3, mod1Snor2), logLik)
+sapply(list(mod1Snor3, mod1Snor2), fixef)
+sapply(list(mod1Snor3, mod1Snor2), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod1Snof0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))#null model (no fixed effects)
+
+mod1SnofU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))#urchins only
+
+mod1SnofC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))#connectivity only
+
+mod1SnofA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))# patch area only
+
+mod1SnofUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))# urchins and connectivity
+
+mod1SnofUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))#urchins and patch area
+
+mod1SnofCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))# connectivity and patch area
+
+mod1SnofUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod1SnofUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))# urchin x connectivity
+
+mod1SnofUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod1Sno, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod1Sno_AICs <- AIC(mod1Snof0, mod1SnofU, mod1SnofC, mod1SnofA, mod1SnofUC, mod1SnofUA, mod1SnofCA, mod1SnofUCA, mod1SnofUxC, mod1SnofUxCA)
+
+#get the delta AIC values
+mod1Sno_deltas <- deltaAIC.fun(mod1Sno_AICs[, 2], min(mod1Sno_AICs[, 2]))
+
+#get the weights
+mod1Sno_weights <- as.vector(round(Weights(mod1Sno_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod1Sno_AICs$delta <- mod1Sno_deltas
+mod1Sno_AICs$weights <- mod1Sno_weights
+
+mod1Sno_AICs <- mod1Sno_AICs[order(mod1Sno_AICs$AIC), ] 
+
+#mod1Sno_AICs
+
+
+```
+
+### 0 semester lag
+
+```{r}
+# check the indexes for the outliers are the same
+which(full_data_for_mod0S$site.trans==full_data_for_mod$site.trans[144] & full_data_for_mod0S$year.sem==full_data_for_mod$year.sem[144])
+which(full_data_for_mod0S$site.trans==full_data_for_mod$site.trans[176] & full_data_for_mod0S$year.sem==full_data_for_mod$year.sem[176])
+which(full_data_for_mod0S$site.trans==full_data_for_mod$site.trans[177] & full_data_for_mod0S$year.sem==full_data_for_mod$year.sem[177])
+which(full_data_for_mod0S$site.trans==full_data_for_mod$site.trans[179] & full_data_for_mod0S$year.sem==full_data_for_mod$year.sem[179])
+# all are the same 
+
+full_data_for_mod0Sno <- full_data_for_mod0S[c(-144, -176, -177,-179),]
+
+```
+
+random effect selection
+```{r}
+
+mod0Snor3 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|patch) + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))  # failed to converge
+
+#summary(mod0Snor3) # patch has tiny variance
+
+# remove random effect of patch and refit
+mod0Snor2 <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))
+
+#compare estimates with and without patch random effect
+sapply(list(mod0Snor3, mod0Snor2), logLik)
+sapply(list(mod0Snor3, mod0Snor2), fixef)
+sapply(list(mod0Snor3, mod0Snor2), function(x) unlist(VarCorr(x)))
+#failed to converge with random effect of patch, but estimates with and without patch are basically the same
+
+```
+
+fixed effects selection
+
+```{r}
+#fit all the models
+
+mod0Snof0 <- glmer(kelp_status ~ (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))#null model (no fixed effects)
+
+mod0SnofU <- glmer(kelp_status ~ urchin_dens + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))#urchins only
+
+mod0SnofC <- glmer(kelp_status ~ patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))#connectivity only
+
+mod0SnofA <- glmer(kelp_status ~ patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))# patch area only
+
+mod0SnofUC <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))# urchins and connectivity
+
+mod0SnofUA <- glmer(kelp_status ~ urchin_dens + patch_area + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))#urchins and patch area
+
+mod0SnofCA <- glmer(kelp_status ~ patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))# connectivity and patch area
+
+mod0SnofUCA <- glmer(kelp_status ~ urchin_dens + patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit)) #urchins, connectivity, and patch area
+
+mod0SnofUxC <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))# urchin x connectivity
+
+mod0SnofUxCA <- glmer(kelp_status ~ urchin_dens*patch_conn0.9 + patch_area  + (1|transect_id) + (1|fyear), data=full_data_for_mod0Sno, family = binomial(link=logit))# urchin x connectivity and patch area
+
+```
+
+model selection
+
+```{r}
+# get the AICs
+mod0Sno_AICs <- AIC(mod0Snof0, mod0SnofU, mod0SnofC, mod0SnofA, mod0SnofUC, mod0SnofUA, mod0SnofCA, mod0SnofUCA, mod0SnofUxC, mod0SnofUxCA)
+
+#get the delta AIC values
+mod0Sno_deltas <- deltaAIC.fun(mod0Sno_AICs[, 2], min(mod0Sno_AICs[, 2]))
+
+#get the weights
+mod0Sno_weights <- as.vector(round(Weights(mod0Sno_AICs[, 2]), 3))
+
+# add the delta AICs and weights to the AIC dataframe
+mod0Sno_AICs$delta <- mod0Sno_deltas
+mod0Sno_AICs$weights <- mod0Sno_weights
+
+mod0Sno_AICs <- mod0Sno_AICs[order(mod0Sno_AICs$AIC), ] 
+
+
+```
+
+
+### compare
+
+```{r}
+
+# compare the AICs of the best model for each version of connectivity
+mod2Sno_AICs[which(mod2Sno_AICs[,2]==min(mod2Sno_AICs[,2])), 2]
+mod1Sno_AICs[which(mod1Sno_AICs[,2]==min(mod1Sno_AICs[,2])), 2]
+mod0Sno_AICs[which(mod0Sno_AICs[,2]==min(mod0Sno_AICs[,2])), 2]
+
+# one semester lag has the lowest AIC
+
+```
+
+
+

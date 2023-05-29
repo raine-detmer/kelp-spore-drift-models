@@ -1,0 +1,1376 @@
+---
+title: "format_data"
+author: "Raine Detmer"
+date: "4/6/2023"
+output: html_document
+---
+
+README: code for 1) formatting all the empirical data to be used for fitting the GLMM and 2) making data figures (Fig. 5, Fig. S7, and Fig. S8)
+
+# packages
+```{r}
+library("tidyverse")
+
+library("lubridate")
+
+library("sf")
+
+library("sp")
+
+library("spatialEco")#for rotating polygons
+
+library("raster")#for working with rasters
+
+library("mapview")#for making interactive maps
+
+library("ggspatial")# for adding scale bar and north arrow to maps
+
+library("ggdist")# for raincloud plots
+
+library("ggpubr") # for ggarrange()
+
+library("grid") # for using viewport() to add plots as insets
+
+```
+
+# spatial
+
+## transect data
+
+Format the data on the coordinates and headings of the benthic transects
+
+SBC LTER transects:
+
+```{r}
+# Package ID: knb-lter-sbc.43.10 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Reef: Kelp Forest Community Dynamics: Transect depth data.
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+                   
+sbctrans1 <-read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/43/10/07675f89d4197afb4b682b3d73699fac",header=F ,skip=1 ,sep=","  ,quot='"', col.names=c("SITE", "TRANSECT","DEPTH_MLLW_M", "SD_DEPTH", "CV_DEPTH", "LATITUDE", "LONGITUDE", "SITE_NAME"), check.names=TRUE)
+
+sbctrans1.2 <- sbctrans1 %>% mutate(site.trans = paste(SITE, TRANSECT, sep = ".")) %>% dplyr::select(SITE, TRANSECT, LATITUDE, LONGITUDE, site.trans) %>% rename(Site = SITE, Transect = TRANSECT, Lat = LATITUDE, Long = LONGITUDE)
+
+#View(sbctrans1.2)
+
+# add the transect headings from "Entity 1: Benthic community survey sites, transect descriptions" (available at https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.43)
+
+sbcheadings <- data.frame(
+  site.trans = c('ABUR.1','ABUR.2','AHND.1','AHND.2','AQUE.1','AQUE.2','AQUE.3','AQUE.4','AQUE.5','AQUE.6','AQUE.7','AQUE.8','BULL.1','BULL.3','BULL.6','CARP.1','CARP.2','CARP.3','CARP.4','CARP.5','CARP.6','CARP.7','CARP.8','CARP.9','CARP.10','GOLB.1','GOLB.2','IVEE.1','IVEE.2','IVEE.3','IVEE.4','IVEE.5','IVEE.6','IVEE.7','IVEE.8','MOHK.1','MOHK.2','MOHK.3','MOHK.4','NAPL.1','NAPL.2','NAPL.3','NAPL.4','NAPL.5','NAPL.6','NAPL.7','NAPL.8','NAPL.9','NAPL.10','SCDI.2','SCDI.3','SCTW.2','SCTW.3'),
+  
+  heading = c(310,320,105,90,90,90,112,90,95,90,95,90,80,85,80,70,60,85,90,80,80,80,80,80,90,90,90,90,80,90,90,90,90,90,90,90,90,55,270,60,80,80,90,100,100,90,100,90,90,305,330,330,290)
+)
+
+# add newer transects that weren't included in the sbctrans1 dataset (transects that were added later as part of a long term experiment):
+
+# Package ID: knb-lter-sbc.44.9 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Long-term experiment: Kelp Removal: Transect depth data .
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+ sbctransnew <-read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/44/9/b33eb7e93b097b92adc48bd802451fb4",header=F ,skip=1,sep="," ,quot='"', col.names=c( "SITE", "TRANSECT","DEPTH_MLLW_M", "SD_DEPTH", "CV_DEPTH", "LATITUDE", "LONGITUDE", "SITE_NAME"), check.names=TRUE)
+
+sbctransnew.2 <- sbctransnew  %>% mutate(site.trans = paste(SITE, TRANSECT, sep = ".")) %>% dplyr::select(SITE, TRANSECT, LATITUDE, LONGITUDE, site.trans) %>% rename(Site = SITE, Transect = TRANSECT, Lat = LATITUDE, Long = LONGITUDE)
+
+# check for duplicates
+#dplyr::setdiff(sbctransnew.2$site.trans, sbctrans1.2$site.trans) #c("AQUE.7",  "AQUE.8",  "CARP.9",  "CARP.10", "IVEE.4",  "MOHK.3",  "MOHK.4", "NAPL.9",  "NAPL.10")
+sbctransnew.2 <- sbctransnew.2 %>% filter(site.trans %in% dplyr::setdiff(sbctransnew.2$site.trans, sbctrans1.2$site.trans))
+
+#View(sbctransnew.2)
+
+# put the sets of transects together 
+sbctrans1.3 <- rbind(sbctrans1.2, sbctransnew.2) %>% arrange(Site)
+
+# put all this together
+sbctrans1.3 <- left_join(sbctrans1.3, sbcheadings, by = c("site.trans"))
+
+#View(sbctrans1.3)
+
+```
+
+
+
+```{r}
+#turn the transect point coordinates into spatial rectangles (each transect is a  2 x 40m rectangle)
+
+#working in utm so need to account for grid divergence: true north is not 0º in utm
+#https://www.fountainware.com/compass/Documents/DeclinationConvergence.htm
+# use convergence angle = (long - long of central meridian of utm zone) x sin(lat) (https://gis.stackexchange.com/questions/115531/calculating-grid-convergence-true-north-to-grid-north)
+# longitude of central meridian for utm zone 11 is 117ºW
+
+sbctrans2 <- sbctrans1.3 %>% mutate(CA = (-Long - 117)*sin(Lat)) %>% mutate(heading2 = heading + CA)
+
+
+#the data give the coordinates for one end of the transect, so first need to move points to the center of the transect
+#use approach from https://stackoverflow.com/questions/69820690/finding-coordinates-from-heading-and-distance-in-r
+
+# turn transect coords into sf object
+tpts1 <- sbctrans2 %>% st_as_sf(coords = c("Long","Lat")) %>% st_set_crs(4326)
+
+tpts1 <- st_transform(tpts1, 32611)#change the spatial reference system to utm
+
+#mapview(tpts1)
+
+#add columns with the coordinate values
+tpts1$utmx <- st_coordinates(tpts1)[,1]
+tpts1$utmy <- st_coordinates(tpts1)[,2]
+
+#function to convert degrees to radians
+deg2rad <- function(deg) {(deg * pi) / (180)}
+
+#calculate the midpoints of the transects: 20m from the end point in direction equal to the heading (since each transect is 40m long)
+tpts1$newx <- tpts1$utmx + (20*sin(deg2rad(tpts1$heading2)))
+tpts1$newy <- tpts1$utmy + (20*cos(deg2rad(tpts1$heading2)))
+
+#make this a data frame
+tpts2 <- as.data.frame(tpts1)
+#make this new data frame an sf object using the new coordinates for the point geometries 
+tpts2 <- tpts2 %>% st_as_sf(coords = c("newx", "newy")) %>% st_set_crs(32611)
+
+#plot this to check
+#mapview(list(tpts1,tpts2),col.regions=list("red","blue"),col=list("red","blue"))
+
+#now make a rectangular buffer around the midpoints, with a width of 2 and a length of 40 and an angle equal to the heading (since each transect is 2m wide and 80m long)
+# follow this approach: https://stackoverflow.com/questions/60769423/convert-point-to-rectangle-polygon-with-width-x-km-and-height-y-km-in-sf-r
+#rotate.polygon: https://www.rdocumentation.org/packages/spatialEco/versions/1.3-7/topics/rotate.polygon
+
+#function to get rectangle around a point x and rotate it by angle head (in degrees)
+rect_and_rot <- function(x,xsize,ysize, head){
+  bbox <- st_bbox(x)#get the bounding box
+  bbox <- bbox +c(xsize ,ysize,-xsize,-ysize)#make bounding box a rectangle with desired dimensions
+  poly <- st_as_sfc(bbox)#convert bounding box into a polygon
+  poly2 <- rotate.polygon(poly, angle = head + 90, sp = FALSE, anchor = "center")%>% st_set_crs(32611)#use rotate.polygon() to rotate the polygon, not sure why I need to add 90º but I do. Then set the coordinate system to make sure the units are correct
+  return(poly2)#return the rotated rectangular polygon centered on point x
+}
+
+
+#now apply the function to all the points
+# see https://gis.stackexchange.com/questions/351620/creating-multiple-polygons-from-a-list-of-coordinate-matrices-using-sf-in-r/351644#351644
+
+sbctrnspol.list <- mapply(rect_and_rot, tpts2$geometry, 20, 1, tpts2$heading2)
+
+sbctrnspol = sbctrnspol.list[[1]]
+
+for (i in 2:length(sbctrnspol.list)) {
+  sbctrnspol <- c(sbctrnspol, sbctrnspol.list[[i]])
+}
+
+
+#add back the site.trans id 
+site.trans <- as.data.frame(tpts2$site.trans)
+colnames(site.trans) <- c("site.trans")
+
+sbctrnspol2 <- cbind(site.trans, sbctrnspol) %>% st_as_sf()%>% st_set_crs(32611)
+
+# plot to check
+#mapview(sbctrnspol2)+mapview(list(tpts1,tpts2),col.regions=list("red","blue"),col=list("red","blue")) 
+
+# check that the area of each rectangle is 80m2
+#st_area(sbctrnspol2$geometry[1])
+
+```
+
+CINP KFMP transects: 
+
+The CINP KFMP transect coordinates are available in Table 1 of Kushner et al. 2013 (http://dx.doi.org/10.1890/13-0562.1). The transect headings are available upon request (email david_kushner'at'nps.gov); because they need to be requested directly, this Rmd shows all code for overlaying the transects with Landsat pixels, but it is commented out and the final results (dataframes with each transect and the pixels it overlaps) are imported from the "intermediate_data_output" folder in this project's github repository.
+
+```{r}
+#read in the data on transect coordinates and approximate headings
+#kfmtrans <- read.csv("CINP_KFMP_transects.csv") # csv containing the transect coordinates (from Table 1 of Kushner et al. 2013) and their headings
+
+#rearrange the columns
+#kfmtrans <- kfmtrans %>% relocate(Latitude, .after = Site) %>% relocate(Longitude, .after= Latitude) %>% dplyr::select(Site, Latitude, Longitude, Orientation)
+
+#adjust the headings to account for utm coordinates
+#kfmtrans2 <- kfmtrans %>% mutate(CA = (-Longitude - 117)*sin(Latitude)) %>% mutate(Orientation2 = Orientation + CA)
+
+
+#transect coords are already at the center of the transect (approximately), convert them to sf object
+#tptsk1 <- kfmtrans2 %>% st_as_sf(coords = c("Longitude","Latitude")) %>% st_set_crs(4326)
+
+#tptsk1 <- st_transform(tptsk1, 32611)#change the spatial reference system to utm
+
+#add columns with the coordinate values
+#tptsk1$utmx <- st_coordinates(tptsk1)[,1]
+#tptsk1$utmy <- st_coordinates(tptsk1)[,2]
+
+#turn coordinate points into rectangular transects (transects are about 100m long, benthic monitoring goes 1m on each side)
+#kfmtrnspol.list <- mapply(rect_and_rot, tptsk1$geometry, 50, 1, tptsk1$Orientation2)
+
+#kfmtrnspol = kfmtrnspol.list[[1]]
+
+#for (i in 2:length(kfmtrnspol.list)) {
+ # kfmtrnspol <- c(kfmtrnspol, kfmtrnspol.list[[i]])
+#}
+
+
+#add back the site.trans id
+#Site <- as.data.frame(tptsk1$Site)
+#colnames(Site) <- c("Site")
+
+#kfmtrnspol2 <- cbind(Site, kfmtrnspol) %>% st_as_sf()%>% st_set_crs(32611)
+
+#plot to check
+#mapview(kfmtrnspol2)+mapview(tptsk1) 
+
+#st_area(kfmtrnspol2$geometry[1])#check that area of each rectangle is 200m2
+
+```
+
+
+## patch data
+
+These SBC LTER data contain the coordinates of every Landsat pixel within each patch in the southern California giant kelp metapopulation. More information is available at: 
+
+https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.101
+
+```{r}
+
+#download the data on patch coordinates
+#https://portal.edirepository.org/nis/mapbrowse?packageid=knb-lter-sbc.101.2
+
+# Package ID: knb-lter-sbc.101.2 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Spatial definitions of giant kelp (Macrocystis pyrifera) patches in southern and central California.
+# Data set creator:  Kyle C Cavanaugh -  
+# Data set creator:  David A Siegel -  
+# Data set creator:  Peter T Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+patchdef <-read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/101/2/0d416cc00ad948c6befb2a97e9db6414", header=F, skip=1, sep="," , col.names=c("patch_number","pixel_latitude", "pixel_longitude"), check.names=TRUE)
+
+
+```
+
+```{r}
+
+#View(patchdef)#want to rename the lat and long columns and add a pixelid column (each row is a unique Landsat pixel)
+
+patchdef2 <- patchdef %>% rename(latitude = pixel_latitude, longitude = pixel_longitude)%>% mutate(pixid = row_number())#add pixel id number for comparing before and after shift
+
+patchdef2$patch_number <- gsub("socal_", "", patchdef$patch_number) #the patches are labeled as "socal_#" so extract just the number
+
+#now turn this into a spatial object, change the coordinate system to utm, and change the pixel coordinates from the center to the upper left (for rasterizing the points):
+
+#convert the dataframe to sf object
+patchpts <- st_as_sf(patchdef2, coords = c("longitude", "latitude"))
+st_crs(patchpts) <- 4326#set the crs
+
+#convert to utm
+patchpts2 <- st_transform(patchpts, 32611)#change the spatial reference system to utm zone 11
+
+#add columns with the coordinate values
+patchpts2$utmx <- st_coordinates(patchpts2)[,1]
+patchpts2$utmy <- st_coordinates(patchpts2)[,2]
+
+#change the coordinates from the pixel centers to the upper left corners: subtracting from the x and adding to the y to go from center to upper right
+patchpts2$newx <- round(patchpts2$utmx) - 15
+patchpts2$newy <- round(patchpts2$utmy) +15
+
+#Reason for rounding: when converting from degree decimal to utm, the utm coords have a lot of decimal places, and the distances between adjacent points aren't all exactly 30 (some around 29.999). And this caused some points to be lost when turning them into a raster, which requires and evenly spaced grid, so need to round them
+
+#now make a new sf object with the upper left points as the coordinates
+#first make this a data frame
+patchpts2.df <- as.data.frame(patchpts2)#make this a data frame
+
+#remove unnecessary rows and change the coordinates, also change patch_number to patch
+patchpts2.df <- patchpts2.df %>% dplyr::select(patch_number, newx, newy, pixid) %>% relocate(pixid, .before = patch_number) %>% rename(patch = patch_number)
+
+#make this new data frame an sf object using the new coordinates for the point geometries 
+patchpts3 <- patchpts2.df %>% st_as_sf(coords = c("newx", "newy")) %>% st_set_crs(32611)
+
+#add utmx and utmy columns
+patchpts3$utmx <- st_coordinates(patchpts3)[,1]
+patchpts3$utmy <- st_coordinates(patchpts3)[,2]
+ 
+#check that it worked
+#mapview(list(patchpts2[1:500, ],patchpts3[1:500, ]), col.regions=list("red","blue"), col=list("red","blue")) 
+
+```
+
+
+Filter out study region and turn the points into a raster (each point represents a 30 x 30m Landsat pixel)
+
+```{r}
+#Filter out study region (which is approximately bordered by xmin: 168810 ymin: 3703890 xmax: 327120 ymax: 3829740)
+
+patchpts_sub <- patchpts3
+
+patchpts_sub$utmx <- st_coordinates(patchpts_sub)[,1]
+patchpts_sub$utmy <- st_coordinates(patchpts_sub)[,2]
+
+#subset out the study region
+patchpts_sub1 <- patchpts_sub %>% filter(utmx<327120)%>% filter(utmx>168810) %>% filter(utmy>3703890) %>% filter(utmy < 3829740)
+
+patchpts_sub1$patch <- as.numeric(patchpts_sub1$patch)#needed to change patch to numeric for rasterize
+
+
+#make the raster:
+
+#get the max and min values of the raster: the coords are the upper left of each cell. So to get the bottom and right borders, need to add 30m to max lon and subtract 30m from the min lat
+pxmnutm <- min(patchpts_sub1$utmx) 
+pxmxutm <- max(patchpts_sub1$utmx) + 30
+pymnutm <- min(patchpts_sub1$utmy) - 30
+pymxutm <- max(patchpts_sub1$utmy) 
+
+#make the raster with same crs as the data points, no values (empty), resolution of 30m x 30m, and the min and max values specified above
+patch_rst <- raster(crs = crs(patchpts_sub1), vals = 0, resolution = c(30, 30), xmn=pxmnutm, ymn=pymnutm, xmx=pxmxutm, ymx=pymxutm)
+
+#area(patch_rst)#check that the area of the cells is 900m2
+
+#rasterize the points
+patch_rst2 <- rasterize(patchpts_sub1, patch_rst)
+
+#now convert this back to sf object with the cells as polygons
+#https://taromieno.netlify.app/post/raster_to_polygons_2018/
+
+#first convert to sp object (takes a few min)
+patchsp <- as(patch_rst2,'SpatialPolygonsDataFrame')
+
+#check the number of features (polygons) match number of data points
+#patchpts_sub1#112467
+#patchsp #112467
+
+#now convert this to sf object
+patchrstsf <- st_as_sf(patchsp)%>% st_set_crs(32611)
+
+#check that it looks good: plot the polygons and the points
+#mapview(patchrstsf[which(patchrstsf$patch==160), ])+ patchpts_sub1[which(patchpts_sub1$patch==160), ] 
+
+#mapview(patchrstsf[which(patchrstsf$patch==160), ], col.regions=list("red"),col=list("red"))+ mapview(list(patchpts3[which(patchpts3$patch==160), ], patchpts2[which(patchpts2$patch_number==160), ]), col.regions=list("red","blue"),col=list("red","blue")) 
+
+
+```
+
+
+
+## overlay 
+
+overlay the patch pixels with the benthic transects to identify all patches that contain benthic transects
+
+SBC LTER:
+
+```{r}
+#get all the patch pixels that overlap with/touch each transect (no buffer region)
+patch_sbc <- st_intersects(sbctrnspol2, patchrstsf)
+
+#turn patch_sbc into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+patch_sbc_match <- as.data.frame(patch_sbc)
+colnames(patch_sbc_match) <- c("sbcid", "pxid")
+
+#check this looks ok
+#mapview(patchrstsf[c(patch_sbc_match$pxid), ]) + mapview(sbctrnspol2, col.regions=list("red"),col=list("red"))
+
+#View(patch_sbc_match)#this just gives the indexes (1, 2,3, etc) but want the actual site.trans and pixel id values
+
+#add the actual site.trans and pixel ids:
+#make the empty vectors
+patch_sbc_match$pixel <- NaN*patch_sbc_match$pxid
+
+patch_sbc_match$patch <- NaN*patch_sbc_match$pxid
+
+patch_sbc_match$site.trans <- NaN*patch_sbc_match$sbcid
+
+for(i in 1:length(patch_sbc_match$sbcid)){
+  
+  patch_sbc_match$pixel[i] <- patchrstsf$pixid[patch_sbc_match$pxid[i]]
+  
+  patch_sbc_match$patch[i] <- patchrstsf$patch[patch_sbc_match$pxid[i]]
+  
+  patch_sbc_match$site.trans[i] <- sbctrnspol2$site.trans[patch_sbc_match$sbcid[i]]
+  
+}
+
+#remove the index columns
+patch_sbc_match2 <- patch_sbc_match %>% dplyr::select(pixel, patch, site.trans)
+#View(patch_sbc_match2)
+
+#there is one case where a transect is in more than one patch (IVEE.1), so group by patch and choose mode (i.e., assign the transect to the patch with the most pixels that intersect the transect)
+
+#make a function to get mode, code from https://www.tutorialspoint.com/r/r_mean_median_mode.htm
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#note this function just returns the first appearing mode in a vector with multiple modes, see https://stackoverflow.com/questions/2547402/how-to-find-the-statistical-mode
+#but IV is the only place where a transect is in multiple patches, and it has 2 pixels from 153 and 1 pixel from 152 so multiple modes aren't an issue 
+
+patch_sbc_match3 <- patch_sbc_match2 %>% group_by(site.trans) %>% summarize(patch = getmode(patch), npix = n())
+
+
+```
+
+
+CINP KFMP:
+
+```{r}
+
+#get all the patch pixels that overlap with/touch each transect (no buffer region)
+#patch_kfm <- st_intersects(kfmtrnspol2, patchrstsf)
+
+#turn patch_kfm into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+#patch_kfm_match <- as.data.frame(patch_kfm)
+#colnames(patch_kfm_match) <- c("kfmid", "pxid")
+
+#check this looks ok
+#mapview(patchrstsf[c(patch_kfm_match$pxid), ]) + mapview(kfmtrnspol2, col.regions=list("red"),col=list("red"))
+
+#add the actual site.trans and pixel ids
+#make the empty vectors
+#patch_kfm_match$pixel <- NaN*patch_kfm_match$pxid
+
+#patch_kfm_match$patch <- NaN*patch_kfm_match$pxid
+
+#patch_kfm_match$Site <- NaN*patch_kfm_match$kfmid
+
+#for(i in 1:length(patch_kfm_match$kfmid)){
+  
+ # patch_kfm_match$pixel[i] <- patchrstsf$pixid[patch_kfm_match$pxid[i]]
+  
+ # patch_kfm_match$patch[i] <- patchrstsf$patch[patch_kfm_match$pxid[i]]
+  
+  #patch_kfm_match$Site[i] <- kfmtrnspol2$Site[patch_kfm_match$kfmid[i]]
+  
+#}
+
+#remove the index columns
+#patch_kfm_match2 <- patch_kfm_match %>% dplyr::select(pixel, patch, Site)
+
+#patch_kfm_match3 <- patch_kfm_match2 %>% group_by(Site) %>% summarize(patch = getmode(patch), npix = n())
+
+#View(patch_kfm_match3)
+#mapview(patchrstsf[c(patch_kfm_match$pxid), ]) + mapview(kfmtrnspol2, col.regions=list("red"),col=list("red"))
+
+# filter out the two cases where the transect is just barely touching a single pixel (site 12 in patch 346 (on Anacapa), site 30 in patch 298 (on SCI))
+#patch_kfm_match3.2 <- patch_kfm_match3 %>% filter(npix>1)
+
+# read in dataset made using the above code
+# note the .. moves up one file path from the current one; the following code assumes a file structure of "name of github repo"/kelp_connectivity_code/Empirical_data/formatdata, where "name of github repo" also includes the "intermediate_data_output" folder
+patch_kfm_match3.2 <- read.csv("../../../intermediate_data_output/KFMP_transect_pixel_matches/kfm_trans_patch.csv")%>% dplyr::select(-X)
+
+#View(patch_kfm_match3.2)
+
+```
+
+
+### Fig. 5a
+Map of the metapopulation
+
+To plot the entire metapopulation, need to rasterize the rest of the pixels. Do this in small chunks rather than all at once
+
+```{r}
+# make a function for subsetting out landsat pixels and turning them into a raster
+pixels_to_rast <- function(patchpts_sub.f){
+  
+#get the max and min values of the raster: the coords are the upper left of each cell. So to get the bottom and right borders, need to add 30m to max lon and subtract 30m from the min lat
+pxmnutm.f <- min(patchpts_sub.f$utmx) 
+pxmxutm.f <- max(patchpts_sub.f$utmx) + 30
+pymnutm.f <- min(patchpts_sub.f$utmy) - 30
+pymxutm.f <- max(patchpts_sub.f$utmy) 
+
+#make the raster with same crs as the data points, no values (empty), resolution of 30m x 30m, and the min and max values specified above
+patch_rst_sub.f <- raster(crs = crs(patchpts_sub.f), vals = 0, resolution = c(30, 30), xmn=pxmnutm.f, ymn=pymnutm.f, xmx=pxmxutm.f, ymx=pymxutm.f)
+
+#rasterize the points 
+patch_rst_sub.f2 <- rasterize(patchpts_sub.f, patch_rst_sub.f)
+
+#convert to sp object
+patchsp_sub.f <- as(patch_rst_sub.f2,'SpatialPolygonsDataFrame')
+
+#now convert this to sf object
+patchrstsf.f <- st_as_sf(patchsp_sub.f)%>% st_set_crs(32611)
+
+return(patchrstsf.f)
+  
+}
+
+# get the subsets to rasterize 
+#subset out all the pixels that aren't in patchpts_sub1
+patchpts_sub2 <- patchpts_sub %>% filter(!(pixid %in% patchpts_sub1$pixid) ) 
+patchpts_sub2$patch <- as.numeric(patchpts_sub2$patch)#change patch to numeric 
+
+# the northernmost patch by point conception:
+patchpts_sub213 <- patchpts_sub2 %>% filter(patch ==213) 
+
+# southern mainland patches
+patchpts_smain <- patchpts_sub2 %>% filter(patch <213) 
+
+# southern channel island patches
+patchpts_sci <- patchpts_sub2 %>% filter(patch >213)
+
+# make the rasters
+patchrstsf213 <- pixels_to_rast(patchpts_sub213)
+
+patchrstsf_smain <- pixels_to_rast(patchpts_smain)
+
+patchrstsf_sci <- pixels_to_rast(patchpts_sci)
+
+# combine everything together and merge
+allptchpoly <- rbind(patchrstsf,patchrstsf213,patchrstsf_smain,patchrstsf_sci)
+
+patchmerge_all <- allptchpoly %>% 
+    group_by(patch) %>%
+    summarise(geometry = sf::st_union(geometry)) %>%
+    ungroup()
+
+#mapview(patchmerge_all)
+
+```
+
+
+Get additional components of the map
+
+```{r}
+
+# centers of the focal metapopulation patches (i.e., those containing benthic transects)
+patchcenter <- patchmerge_all[which(patchmerge_all$patch %in% c(patch_sbc_match3$patch, patch_kfm_match3.2$patch)), ] %>% 
+    #group_by(patch_number) %>%
+    summarise(geometry = sf::st_centroid(geometry)) %>%
+    ungroup()
+
+
+# get the base map
+# download the usa map data
+#usa <- raster::getData("GADM", country = c("United States"), level = 1)
+
+usa <- raster::shapefile("../../../intermediate_data_output/base_map/usa_base.shp") # in case the server for downloading the base map is down, have it pre-downloaded and stored in the "base_map" folder in the "intermediate_data_output" folder on github
+
+
+# get the boundary region (from boundaries of socal metapop: https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.101)
+bounds_full <- st_polygon(list(rbind(c(-120.754, 35.178),# upper left corner
+                                       c(-117.129, 35.178), # upper right corner
+                                       c(-117.129, 32.504), # lower right corner
+                                       c(-120.754, 32.504),  # lower left corner, then complete the polygon
+                                       c(-120.754, 35.178)))) %>% st_sfc() %>% st_set_crs(4326)# st_sfc turns this into a simple feature geometry list column, and then set the coordinate system with st_set_crs
+
+# now need to take the usa data, turn it into an sf object, get the part the overlaps with the boundary region, and then set the coordinate system, and then st_union makes the whole thing a single multipolygon
+# note this takes a few min  
+shore_full <- usa %>% sf::st_as_sf() %>% sf::st_intersection(bounds_full) %>% sf::st_transform(4326) %>% sf::st_union()
+
+# googled santa barbara and los angeles coordinates to add as reference
+# santa barbara: 34.4208° N, 119.6982° W; los angeles: 34.0522° N, 118.2437° W
+
+
+```
+
+
+Make the metapopulation map
+
+
+```{r}
+pdf("Metapopmap2.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray85", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = patchmerge_all, color = "#78A0A0", fill = "#78A0A0", linewidth=2.25)+#note as og ggplot v3.4.0, need to use linewidth instead of size to change the size of the sf objects
+  geom_sf(data = patchcenter, color = "black", fill = "lightcyan1", size = 4, shape=23)+#shape = 23 makes diamond
+  #geom_sf(data = patchmerge_all, color = "darkgoldenrod4", fill = "darkgoldenrod4", linewidth=2.25)+#note as og ggplot v3.4.0, need to use linewidth instead of size to change the size of the sf objects
+  #geom_sf(data = patchcenter, color = "black", fill = "darkgoldenrod1", size = 4, shape=23)+#shape = 23 makes diamond
+  annotate(geom = "text", x = -119.6982 + 0.2, y = 34.4208+0.08, size = 5, label = "Santa Barbara", color = "black")+#fontface = "bold"
+  annotate(geom = "text", x = -118.2437 + 0.1, y = 34.0522, size = 5, label = "Los Angeles", color = "black")+#fontface = "bold"
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray99', color = 'gray99'), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 16), axis.title = element_blank(), panel.border = element_rect(colour = "black", fill=NA, linewidth=0.8), plot.title = element_text(hjust=0, size = 16))+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_x_discrete(breaks = c(-121, -120, -119, -118))+#specify xaxis labels
+  scale_y_discrete(breaks = c(33, 34))+#specify yaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm"), text_cex=1.2)+#text_cex=0.9, pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm")
+  annotation_north_arrow(location = "tl", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"), pad_y = unit(0.35, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  coord_sf(xlim = c(-121.25, -117.12), ylim = c(32.62, 34.575), expand = F) +# make the map go all the way to the edges of the plot
+  ggtitle("a) Southern California giant kelp metapopulation")#+
+  #theme(aspect.ratio=0.52) # make the plot wider than tall
+dev.off()
+
+```
+
+
+
+## swell heights
+
+Combine data on quarterly max swell heights in landsat pixels with the transects in these pixels (this is in order to infer storm regimes throughout the study region when doing ODE model validation simulations)
+
+The swell height data were collected by the Coastal Data Information Program (CDIP;  http://cdip.ucsd.edu/MOP_v1.1/) and formatted to give the quarterly maximum wave height in each Landsat pixel in the southern California Bight by Dr. Tom Bell. The original data were provided in netcdf format; data from pixels in the study region were subsetted out and converted to csv's in Matlab (see LandsatWaves.m)
+
+import the subsetted data
+```{r}
+latd <- read.csv("../../../intermediate_data_output/raw_waves/lat.csv", header = F)# pixel latitudes
+lond <- read.csv("../../../intermediate_data_output/raw_waves/lon.csv", header = F)# pixel longitudes
+utmxd <- read.csv("../../../intermediate_data_output/raw_waves/utmx.csv", header = F)# pixel longitudes (utm reference system)
+utmyd <- read.csv("../../../intermediate_data_output/raw_waves/utmy.csv", header = F)# pixel latitudes (utm reference system)
+qtrd <- read.csv("../../../intermediate_data_output/raw_waves/qtr.csv", header = F) #quarter of the year (1=Jan-Mar, 2 = April-June, 3 = Jul-Sep, 4 = Oct-Dec)
+yeard <- read.csv("../../../intermediate_data_output/raw_waves/year.csv", header = F) # year
+wavesd <- read.csv("../../../intermediate_data_output/raw_waves/waves.csv", header = F) # max swell height in each pixel in each quarter of each year
+
+```
+
+
+```{r}
+# change the column names to the year.quarter: first make the dates data frame with year, quarter, and year.quarter columns
+year.qtrd <- cbind(yeard, qtrd)
+colnames(year.qtrd) <- c("year", "quarter")
+
+year.qtrd2 <- year.qtrd %>% mutate(year.qtr = paste(as.character(year), as.character(quarter), sep = ".")) 
+
+#now make year.qtr the column names for the waves data
+colnames(wavesd) <- year.qtrd2$year.qtr
+
+#now join the lat and lon data to the waves data
+colnames(latd) <- "latitude" 
+colnames(lond) <- "longitude"
+
+colnames(utmxd) <- "utmx" 
+colnames(utmyd) <- "utmy"
+
+wavesd1 <- cbind(wavesd, latd, lond, utmxd, utmyd)
+
+#now convert from wide to long format
+# use gather()
+# http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+# arguments are # data: Data object, key: Name of new key column (made from names of data columns), value: Name of new value column, ...: Names of source columns that contain values, factor_key: if T, treat the new key column as a factor (instead of character vector)
+
+#note this takes a while
+wavesd2 <- gather(wavesd1, year.qtr, waveht, 1:152)%>% left_join(year.qtrd2, by = "year.qtr")
+
+#filter out just years around the study period
+wavesd2 <- wavesd2 %>% filter(year > 1994) %>% filter(year < 2009) 
+#View(wavesd2)
+
+```
+
+
+```{r}
+
+# convert to spatial object to get intersection with transects
+
+# first get large buffer region around each transect and use just the pixels that fall within these (don't want to rasterize all 9 million points)
+
+#extract the utm coords
+utmcoords <- wavesd2 %>% filter(year.qtr == "1996.1") %>% dplyr::select(utmx, utmy) %>% mutate(pixel = row_number())#make a column with a number to identify each pixel
+
+#View(utmcoords)
+
+#make the utm coords an sf object
+cnpts <- utmcoords %>% st_as_sf(coords = c("utmx","utmy")) %>% st_set_crs(32611)#turn lansat coords into sf object
+
+#check that the crs is the right zone
+#st_crs(cnpts)
+
+#add utmx and utmy columns
+cnpts$utmx <- st_coordinates(cnpts)[,1]
+cnpts$utmy <- st_coordinates(cnpts)[,2]
+
+
+#mapview(cnpts[1:10,])
+#st_distance(cnpts$geometry[9], cnpts$geometry[10])#check distance is 30m
+
+# now get large buffers around each transect
+# SBC LTER transects
+sbc500 <- st_buffer(tpts2, dist = 500) #makes circle with radius of 500m around each transect
+
+# now get all landsat pixels intersecting these buffer regions
+cnpy_sbc500 <- st_intersects(sbc500, cnpts)
+cnpy_sbc500_match <- as.data.frame(cnpy_sbc500)
+colnames(cnpy_sbc500_match) <- c("sbcid", "pxid")
+
+
+# repeat for KFMP transects
+#kfm500 <- st_buffer(tptsk1, dist = 500)
+
+#cnpy_kfm500 <- st_intersects(kfm500, cnpts)
+#cnpy_kfm500_match <- as.data.frame(cnpy_kfm500)
+#colnames(cnpy_kfm500_match) <- c("kfmid", "pxid")
+
+# read in dataset made using the above code:
+cnpy_kfm500_match <- read.csv("../../../intermediate_data_output/KFMP_transect_pixel_matches/cnpy_kfm500_match.csv")
+
+# now subset out just these pixels from the utmcoords
+cnpts2 <- cnpts %>% filter(pixel %in% c(cnpy_sbc500_match$pxid, cnpy_kfm500_match$pxid))
+
+# now rasterize these points (wanted to get a smaller set of points before rasterizing them, hence subsetting out those intersecting with large buffers around the transects)
+cnpyrstsf <- pixels_to_rast(cnpts2)
+
+# now get the pixels that intersect transects (no buffers)
+
+# sbc lter
+cnpy_sbc <- st_intersects(sbctrnspol2, cnpyrstsf)
+
+#turn cnpy_sbc into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+cnpy_sbc_match <- as.data.frame(cnpy_sbc)
+colnames(cnpy_sbc_match) <- c("sbcid", "pxid")
+
+#check this looks ok
+#mapview(cnpyrstsf[c(cnpy_sbc_match$pxid), ]) + mapview(sbctrnspol2, col.regions=list("red"),col=list("red"))
+
+# add the actual site.trans and pixel ids
+#make the empty vectors
+cnpy_sbc_match$pixel <- NaN*cnpy_sbc_match$pxid
+
+cnpy_sbc_match$site.trans <- NaN*cnpy_sbc_match$sbcid
+
+for(i in 1:length(cnpy_sbc_match$sbcid)){
+  
+  cnpy_sbc_match$pixel[i] <- cnpyrstsf$pixel[cnpy_sbc_match$pxid[i]]
+  
+  cnpy_sbc_match$site.trans[i] <- sbctrnspol2$site.trans[cnpy_sbc_match$sbcid[i]]
+  
+}
+
+#remove the index columns
+cnpy_sbc_match2 <- cnpy_sbc_match %>% dplyr::select(pixel, site.trans)
+
+# repeat for KFMP
+#get all the patch pixels that overlap with/touch each transect (no buffer region)
+#cnpy_kfm <- st_intersects(kfmtrnspol2, cnpyrstsf)
+
+#turn cnpy_kfm into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+#cnpy_kfm_match <- as.data.frame(cnpy_kfm)
+#colnames(cnpy_kfm_match) <- c("kfmid", "pxid")
+
+#add the actual site.trans and pixel ids
+#make the empty vectors
+#cnpy_kfm_match$pixel <- NaN*cnpy_kfm_match$pxid
+
+#cnpy_kfm_match$Site <- NaN*cnpy_kfm_match$kfmid
+
+#for(i in 1:length(cnpy_kfm_match$kfmid)){
+  
+ # cnpy_kfm_match$pixel[i] <- cnpyrstsf$pixel[cnpy_kfm_match$pxid[i]]
+  
+ # cnpy_kfm_match$Site[i] <- kfmtrnspol2$Site[cnpy_kfm_match$kfmid[i]]
+  
+#}
+
+#remove the index columns
+#cnpy_kfm_match2 <- cnpy_kfm_match %>% dplyr::select(pixel, Site)
+
+# read in dataset made using the above code:
+cnpy_kfm_match2 <- read.csv("../../../intermediate_data_output/KFMP_transect_pixel_matches/cnpy_kfm_match2.csv") %>% dplyr::select(-X)
+
+
+# now join these with the wave data, group by transect, and get mean wave heigh over each transect each quarter
+lter_waves <- cnpy_sbc_match2 %>% left_join(utmcoords, by = "pixel") %>% left_join(wavesd2, by = c("utmx", "utmy")) %>% group_by(site.trans, year, quarter, year.qtr) %>% summarize(waveht = mean(waveht, na.rm = T))
+
+kfm_waves <- cnpy_kfm_match2  %>% left_join(utmcoords, by = "pixel") %>% left_join(wavesd2, by = c("utmx", "utmy"))%>% group_by(Site, year, quarter, year.qtr) %>% summarize(waveht = mean(waveht, na.rm = T))
+
+#View(kfm_waves)
+
+```
+
+
+# benthic data
+
+download the MBON integrated kelp forest/reef Quad and Swath survey data (https://portal.edirepository.org/nis/mapbrowse?scope=edi&identifier=6)
+
+```{r}
+#import the integrated data set
+# Package ID: edi.6.4 Cataloging System:https://pasta.edirepository.org.
+# Data set title: Santa Barbara Channel Marine BON: Nearshore kelp forest integrated quad and swath survey, 1980-ongoing.
+# Data set creator:    - SCB Marine Biodiversity Observation Network 
+# Data set creator:  Robert J Miller - UCSB 
+# Data set creator:  Andrew R Rassweiler - UCSB 
+# Data set creator:  Jenn Caselle - UCSB 
+# Data set creator:  David Kushner - NPS 
+# Data set creator:  Daniel C Reed - UCSB 
+# Data set creator:  Kevin D Lafferty - USGS 
+# Data set creator:  Li Kui - UCSB 
+# Data set creator:  Margaret O'Brien - UCSB 
+# Contact:    - Information Manager, Southern California Bight Marine Biodiversity Observation Network SCB MBON  - sbcbon@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+mbonUrl  <- "https://pasta.lternet.edu/package/data/eml/edi/6/4/e2cdd323d603ddc30e0f60008738e977" 
+mbonFile <- tempfile()
+try(download.file(mbonUrl,mbonFile,method="curl"))
+if (is.na(file.size(mbonFile))) download.file(mbonUrl,mbonFile,method="auto")
+
+                   
+ mbon <-read.csv(mbonFile,header=F ,skip=1,sep="," ,quot='"', col.names=c( "data_source", "sample_method", "date","site_id","subsite_id","transect_id", "replicate_id","proj_taxon_id", "area","count", "auth_taxon_id","auth_name","taxon_name","site_name","subsite_name","latitude","longitude"), check.names=TRUE)
+               
+unlink(mbonFile)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+                
+if (class(mbon$data_source)!="factor") mbon$data_source<- as.factor(mbon$data_source)
+if (class(mbon$sample_method)!="factor") mbon$sample_method<- as.factor(mbon$sample_method)                                   
+# attempting to convert mbon$date dateTime string to R date structure (date or POSIXct)                             
+tmpDateFormat<-"%Y-%m-%d"
+tmp1date<-as.Date(mbon$date,format=tmpDateFormat)
+# Keep the new dates only if they all converted correctly
+if(length(tmp1date) == length(tmp1date[!is.na(tmp1date)])){mbon$date <- tmp1date } else {print("Date conversion failed for mbon$date. Please inspect the data and do the date conversion yourself.")}                                                                    
+rm(tmpDateFormat,tmp1date) 
+if (class(mbon$site_id)!="factor") mbon$site_id<- as.factor(mbon$site_id)
+if (class(mbon$subsite_id)!="factor") mbon$subsite_id<- as.factor(mbon$subsite_id)
+if (class(mbon$transect_id)!="factor") mbon$transect_id<- as.factor(mbon$transect_id)
+if (class(mbon$replicate_id)!="factor") mbon$replicate_id<- as.factor(mbon$replicate_id)
+if (class(mbon$proj_taxon_id)!="factor") mbon$proj_taxon_id<- as.factor(mbon$proj_taxon_id)
+if (class(mbon$area)=="factor") mbon$area <-as.numeric(levels(mbon$area))[as.integer(mbon$area) ]               
+if (class(mbon$area)=="character") mbon$area <-as.numeric(mbon$area)
+if (class(mbon$count)=="factor") mbon$count <-as.numeric(levels(mbon$count))[as.integer(mbon$count) ]               
+if (class(mbon$count)=="character") mbon$count <-as.numeric(mbon$count)
+if (class(mbon$auth_taxon_id)!="factor") mbon$auth_taxon_id<- as.factor(mbon$auth_taxon_id)
+if (class(mbon$auth_name)!="factor") mbon$auth_name<- as.factor(mbon$auth_name)
+if (class(mbon$taxon_name)!="factor") mbon$taxon_name<- as.factor(mbon$taxon_name)
+if (class(mbon$site_name)!="factor") mbon$site_name<- as.factor(mbon$site_name)
+if (class(mbon$subsite_name)!="factor") mbon$subsite_name<- as.factor(mbon$subsite_name)
+if (class(mbon$latitude)=="factor") mbon$latitude <-as.numeric(levels(mbon$latitude))[as.integer(mbon$latitude) ]               
+if (class(mbon$latitude)=="character") mbon$latitude <-as.numeric(mbon$latitude)
+if (class(mbon$longitude)=="factor") mbon$longitude <-as.numeric(levels(mbon$longitude))[as.integer(mbon$longitude) ]               
+if (class(mbon$longitude)=="character") mbon$longitude <-as.numeric(mbon$longitude)
+                
+# Convert Missing Values to NA for non-dates
+mbon$count <- ifelse((trimws(as.character(mbon$count))==trimws(".")),NA,mbon$count)               
+suppressWarnings(mbon$count <- ifelse(!is.na(as.numeric(".")) & (trimws(as.character(mbon$count))==as.character(as.numeric("."))),NA,mbon$count))
+mbon$auth_taxon_id <- as.factor(ifelse((trimws(as.character(mbon$auth_taxon_id))==trimws(".")),NA,as.character(mbon$auth_taxon_id)))
+mbon$auth_name <- as.factor(ifelse((trimws(as.character(mbon$auth_name))==trimws(".")),NA,as.character(mbon$auth_name)))
+mbon$subsite_name <- as.factor(ifelse((trimws(as.character(mbon$subsite_name))==trimws(".")),NA,as.character(mbon$subsite_name)))
+mbon$latitude <- ifelse((trimws(as.character(mbon$latitude))==trimws(".")),NA,mbon$latitude)               
+suppressWarnings(mbon$latitude <- ifelse(!is.na(as.numeric(".")) & (trimws(as.character(mbon$latitude))==as.character(as.numeric("."))),NA,mbon$latitude))
+mbon$longitude <- ifelse((trimws(as.character(mbon$longitude))==trimws(".")),NA,mbon$longitude)               
+suppressWarnings(mbon$longitude <- ifelse(!is.na(as.numeric(".")) & (trimws(as.character(mbon$longitude))==as.character(as.numeric("."))),NA,mbon$longitude))
+
+```
+
+format the data
+```{r}
+# first match the LTER transect id's to the corresponding site.trans labels used by the SBC LTER (this was done by comparing the mbon data and the original LTER data, available at https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.19, and matching up the transects; code not shown)
+
+site_trans_id <- data.frame(c("c-l-00001", "c-l-00002", "c-l-00003", "c-l-00004", "c-l-00005", "c-l-00006", "c-l-00007", "c-l-00008", "c-l-00009", "c-l-00010", "c-l-00011", "c-l-00013", "c-l-00014", "c-l-00019", "c-l-00020", "c-l-00021", "c-l-00022", "c-l-00023", "c-l-00024", "c-l-00025", "c-l-00026", "c-l-00027", "c-l-00028", "c-l-00031", "c-l-00035","c-l-00034", "c-l-00032","c-l-00030", "c-l-00029", "c-l-00033", "c-l-00037", "c-l-00038", "c-l-00039", "c-l-00040", "c-l-00041", "c-l-00042", "c-l-00043", "c-l-00044", "c-l-00045", "c-l-00046", "c-l-00047", "c-l-00048", "c-l-00050", "c-l-00051"), c("ABUR.1", "ABUR.2", "AHND.2",  "AHND.1", "AQUE.4", "AQUE.6", "AQUE.3", "AQUE.1", "AQUE.2", "AQUE.5", "BULL.3", "BULL.1", "BULL.6", "CARP.1", "CARP.6", "CARP.7", "CARP.2", "CARP.4", "CARP.8", "CARP.3", "CARP.5", "GOLB.2", "GOLB.1", "IVEE.2", "IVEE.1","IVEE.3", "IVEE.5","IVEE.6", "IVEE.7", "IVEE.8","MOHK.2", "MOHK.1", "NAPL.1", "NAPL.8", "NAPL.2", "NAPL.6", "NAPL.3", "NAPL.5", "NAPL.4",  "NAPL.7", "SCDI.3", "SCDI.2", "SCTW.3", "SCTW.2"))
+colnames(site_trans_id) <- c("transect_id", "site.trans")
+
+# join this to the subset of the mbon dataset containing the LTER data, filter out just the data used at the time the data set was downloaded for this study (this is an ongoing dataset), also filter out just the species of interest (giant kelp and urchins)
+mbon.lter <- left_join(mbon[which(mbon$data_source =="lter"), ], site_trans_id, by = "transect_id") %>% filter(date < "2020-07-29") %>% filter(taxon_name %in% c("Macrocystis pyrifera", "Strongylocentrotus purpuratus", "Mesocentrotus franciscanus"))
+
+# also subset out the kfmp data, add site.trans column (so the columns match the lter data), filter out data used in this study and species of interest
+mbon.kfm <- mbon %>% filter(data_source =="kfm") %>% mutate(site.trans = paste(site_name, transect_id, sep = "."))%>% filter(date < "2020-07-29") %>% filter(taxon_name %in% c("Macrocystis pyrifera", "Strongylocentrotus purpuratus", "Mesocentrotus franciscanus"))
+
+
+# get transect level kelp densities
+# LTER data: subset out the swath data and get the transect level densities. First get the total count in each replicate (combine counts of adult and subadult plants), can then get the transect level totals and total area (otherwise summing area will double count replicates where both adults and subadults were counted). 
+lter_kelp <- mbon.lter%>% filter(taxon_name == "Macrocystis pyrifera") %>% filter(sample_method=="swath")%>% filter(is.na(count)==F) %>% group_by(date, site_id, transect_id, replicate_id, site_name, site.trans) %>% summarise(count = sum(count), area = max(area)) %>% group_by(date, site_id, transect_id, site_name, site.trans) %>% summarise(kelp_dens = sum(count)/sum(area), area = sum(area))
+
+# KFM data: subset out the 5m quad data and get the transect level densities. First get the total count in each replicate (combine counts of adult and subadult plants), can then get the transect level totals and total area
+kfm_kelp <- mbon.kfm %>% filter(taxon_name == "Macrocystis pyrifera") %>% filter(sample_method=="5mquad")%>% group_by(date, site_id, transect_id, replicate_id, site_name, site.trans) %>% summarise(count = sum(count), area = max(area)) %>% group_by(date, site_id, transect_id, site_name, site.trans) %>% summarise(kelp_dens = sum(count)/sum(area), area = sum(area))
+
+#combine the lter and kfm kelp data, add year.sem column to later pair with connectivity data
+kelp <- rbind(lter_kelp, kfm_kelp)%>% mutate(month = month(date), year = year(date)) %>% mutate(semester = if_else(month < 7, 1, 2)) %>%  mutate(year.sem= if_else(semester==1, as.Date(paste(year, 01, 01, sep="-")),  as.Date(paste(year, 07, 01, sep="-")))) %>% rename(surv_date.k = date, surv_area.k = area) %>% dplyr::select(-month) 
+
+# get the transect level urchin densities
+# LTER data: get the total count in each replicate (combine purple and red urchin counts), then get the transect level totals and total area (=sum of areas of the replicates sampled) and calculate total density. (note this is the same as getting the density in each replicate and then taking the mean across all the replicates)
+lter_urchins <- mbon.lter%>% filter(taxon_name %in% c("Strongylocentrotus purpuratus", "Mesocentrotus franciscanus")) %>% group_by(date, site_id, transect_id, replicate_id, site_name, site.trans) %>% summarise(count = sum(count), area = max(area)) %>% group_by(date, site_id, transect_id, site_name, site.trans) %>% summarise(urchin_dens = sum(count)/sum(area), area = sum(area))
+
+# KFM data: Filter dates past 1996 (when sampling protocol was last changed). Get the transect level densities. First need to get the total count in each replicate (combine purple and red urchin counts), can then get the transect level totals and total area
+kfm_urchins <- mbon.kfm %>% filter(taxon_name %in% c("Strongylocentrotus purpuratus", "Mesocentrotus franciscanus")) %>% filter(date > "1996-01-01") %>% group_by(date, site_id, transect_id, replicate_id, site_name, site.trans) %>% summarise(count = sum(count), area = max(area)) %>% group_by(date, site_id, transect_id, site_name, site.trans) %>% summarise(urchin_dens = sum(count)/sum(area), area = sum(area))
+
+#combine the lter and kfm kelp data, add year.sem column to later pair with connectivity data
+urchins <- rbind(lter_urchins, kfm_urchins)%>% mutate(month = month(date), year = year(date)) %>% mutate(semester = if_else(month < 7, 1, 2)) %>%  mutate(year.sem= if_else(semester==1, as.Date(paste(year, 01, 01, sep="-")),  as.Date(paste(year, 07, 01, sep="-")))) %>% rename(surv_date.u = date, surv_area.u = area) %>% dplyr::select(-month) 
+
+# combine the kelp and urchin data
+transdt1 <- left_join(urchins, kelp, by = c("year", "semester", "year.sem", "site_id", "transect_id", "site_name", "site.trans")) 
+
+```
+
+## Fig S7
+
+Map of all the monitoring sites
+
+```{r}
+
+# get the lat and lon of all the sites
+ltersites <- mbon.lter %>% dplyr::select(site_name, latitude, longitude) %>% distinct() %>% mutate(program = "lter")
+kfmsites <- mbon.kfm %>% dplyr::select(site_name, latitude, longitude) %>% distinct() %>% mutate(program = "kfm")
+
+allsites <- rbind(ltersites, kfmsites) %>% st_as_sf(coords = c("longitude","latitude")) %>% st_set_crs(4326)
+allsites <- st_transform(allsites, 32611)#change the spatial reference system to utm
+
+# make bounding box for legend
+bounds_leg <- st_polygon(list(rbind(c(-119.2, 33.9),# upper left corner
+                                       c(-118.75, 33.9), # upper right corner
+                                       c(-118.75, 33.7), # lower right corner
+                                       c(-119.2, 33.7),  # lower left corner, then complete the polygon
+                                       c(-119.2, 33.9)))) %>% st_sfc() %>% st_set_crs(4326)
+
+
+```
+
+
+```{r}
+#pdf()
+pdf("Benthicmap.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray80", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = allsites[which(allsites$program=="lter"),], color = "black", fill = "lightsalmon", size = 2, shape =24)+#goldenrod2
+  geom_sf(data = allsites[which(allsites$program=="kfm"),], color = "black", fill = "lightskyblue", size = 2, shape=21)+#shape = 21 makes circle
+  #geom_sf_text(data = citysf2, aes(label = city),color = "black", size = 3)+
+  annotate(geom = "text", x = -119.6982-0.01, y = 34.4208+0.04, size = 4, label = "Santa Barbara", color = "black")+#fontface = "bold"
+  #annotate(geom = "text", x = -118.2437, y = 34.0522, size = 3.5, label = "Los Angeles", color = "black")+#fontface = "bold"
+  geom_sf(data = bounds_leg, color = "black", fill = "white")+
+  geom_point(aes(x = -119.11, y = 33.85), color = "black", fill = "lightsalmon", size = 3, shape =24)+
+  geom_point(aes(x = -119.11, y = 33.77), color = "black", fill = "lightskyblue", size = 3, shape=21)+
+  annotate(geom = "text", x = -118.94, y = 33.85, size = 3.5, label = "SBC LTER", color = "black")+
+  annotate(geom = "text", x = -118.94, y = 33.77, size = 3.5, label = "CINP KFMP", color = "black")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray96', color = 'gray96'), axis.text.x = element_text(size = 12), axis.text.y = element_text(size = 12), axis.title = element_blank())+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_y_discrete(breaks = c(33.6, 34, 34.4))+#specify yaxis labels
+  scale_x_discrete(breaks = c(-120, -119, -118))+#specify xaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm"), text_cex=0.9)+
+  annotation_north_arrow(location = "tr", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  coord_sf(xlim = c(-120.754, -118.75), ylim = c(33.4, 34.7), expand = F)# make the map go all the way to the edges of the plot
+dev.off()
+
+```
+
+subset out just the transects that are in metapopulation patches:
+
+```{r}
+
+sbcpatches <- patch_sbc_match3 %>% dplyr::select(-npix) %>% mutate(patch = as.numeric(patch)) #remove npix column, change patch to numeric to match with patch data
+
+kfmpatches <- patch_kfm_match3.2 %>% rename(site_name = Site)%>% dplyr::select(-npix) %>% mutate(site_name = as.factor(site_name)) %>% mutate(patch = as.numeric(patch))#change Site column to site_name for matching and remove npix column, also need to change site_name to a factor to make it match transect data, also change patch to numeric
+
+sbc_match <- transdt1 %>% filter(site.trans %in% sbcpatches$site.trans) %>% left_join(sbcpatches, by = "site.trans")
+
+kfm_match <- transdt1 %>% filter(site_name %in% kfmpatches$site_name) %>% left_join(kfmpatches, by = "site_name")
+
+#now join back together, also change semester factor to match the patch data
+transdt <- rbind(sbc_match, kfm_match)%>% mutate(semester = as.factor(semester)) 
+
+
+#length(unique(transdt$patch))
+#length(unique(transdt$transect_id))
+#length(unique(transdt$site.trans))
+
+
+```
+
+## threshold
+
+get the threshold for the high/low kelp state
+
+```{r}
+quantile(transdt$kelp_dens[which(transdt$kelp_dens>0)], 0.15, na.rm=T)#0.05
+
+# other thresholds (for testing sensitivity)
+quantile(transdt$kelp_dens[which(transdt$kelp_dens>0)], 0.10, na.rm=T)#0.0375
+quantile(transdt$kelp_dens[which(transdt$kelp_dens>0)], 0.15, na.rm=T)#0.05
+quantile(transdt$kelp_dens[which(transdt$kelp_dens>0)], 0.2, na.rm=T)#0.0875
+quantile(transdt$kelp_dens[which(transdt$kelp_dens>0)], 0.25, na.rm=T)#0.1125
+
+```
+
+
+
+
+# metapop data
+
+dispersal times between metapop patches
+
+https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.103
+
+```{r}
+# Package ID: knb-lter-sbc.103.3 Cataloging System:https://pasta.lternet.edu.
+# Data set title: Kelp metapopulations: Semi-annual time series of spore dispersal times among giant kelp patches in southern California, 1996 - 2006.
+# Data set title: Kelp metapopulations: Semi-annual time series of spore dispersal times among giant kelp patches in southern California, 1996 - 2006.
+# Data set creator:  Max Castorani -  
+# Data set creator:  David Siegel -  
+# Data set creator:  Rachel Simons -  
+# Data set creator:  Daniel Reed -  
+# Data set creator:  Peter Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+connUrl  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/103/3/8f8d23290f81ecf6e10d0fb53c905a4e" 
+connFile <- tempfile()
+try(download.file(connUrl,connFile,method="curl"))
+if (is.na(file.size(connFile))) download.file(connUrl,connFile,method="auto")
+
+#name the data fram "patch_conn"             
+ patch_conn <-read.csv(connFile,header=F,skip=1,sep=",",quot='"', col.names=c("source_patch","destination_patch","year","semester","time"), check.names=TRUE)
+               
+unlink(connFile)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+if (class(patch_conn$source_patch)!="factor") patch_conn$source_patch<- as.factor(patch_conn$source_patch)
+if (class(patch_conn$destination_patch)!="factor") patch_conn$destination_patch<- as.factor(patch_conn$destination_patch)
+if (class(patch_conn$semester)!="factor") patch_conn$semester<- as.factor(patch_conn$semester)
+if (class(patch_conn$time)=="factor") patch_conn$time <-as.numeric(levels(patch_conn$time))[as.integer(patch_conn$time) ]               
+if (class(patch_conn$time)=="character") patch_conn$time <-as.numeric(patch_conn$time)
+              
+```
+
+
+biomass and area of the patches
+
+https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.102
+
+```{r}
+# Package ID: knb-lter-sbc.102.1 Cataloging System:https://pasta.lternet.edu.
+# Data set title: Kelp metapopulations: Semi-annual time series of giant kelp patch area, biomass and fecundity in southern California, 1996 - 2006.
+# Data set creator:  Max Castorani -  
+# Data set creator:  Daniel Reed -  
+# Data set creator:  Peter Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Data set creator:  Tom Bell -  
+# Data set creator:  Kyle Cavanaugh -  
+# Data set creator:  David Siegel -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+# Metadata Link: https://portal.lternet.edu/nis/metadataviewer?packageid=knb-lter-sbc.102.1
+
+
+patchUrl  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/102/1/fdeb932980156bbc1dd56622619dc2dd" 
+patchFile <- tempfile()
+try(download.file(patchUrl,patchFile,method="curl"))
+if (is.na(file.size(patchFile))) download.file(patchUrl,patchFile,method="auto")
+
+                   
+ patch_stats <-read.csv(patchFile,header=F,skip=1,sep=",",quot='"', col.names=c("patch_number", "pixel_latitude", "pixel_longitude","patch_area","year", "semester", "patch_biomass","patch_fecundity"), check.names=TRUE)
+               
+unlink(patchFile)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+                
+if (class(patch_stats$patch_number)!="factor") patch_stats$patch_number<- as.factor(patch_stats$patch_number)
+if (class(patch_stats$pixel_latitude)=="factor") patch_stats$pixel_latitude <-as.numeric(levels(patch_stats$pixel_latitude))[as.integer(patch_stats$pixel_latitude) ]               
+if (class(patch_stats$pixel_latitude)=="character") patch_stats$pixel_latitude <-as.numeric(patch_stats$pixel_latitude)
+if (class(patch_stats$pixel_longitude)=="factor") patch_stats$pixel_longitude <-as.numeric(levels(patch_stats$pixel_longitude))[as.integer(patch_stats$pixel_longitude) ]               
+if (class(patch_stats$pixel_longitude)=="character") patch_stats$pixel_longitude <-as.numeric(patch_stats$pixel_longitude)
+if (class(patch_stats$patch_area)=="factor") patch_stats$patch_area <-as.numeric(levels(patch_stats$patch_area))[as.integer(patch_stats$patch_area) ]               
+if (class(patch_stats$patch_area)=="character") patch_stats$patch_area <-as.numeric(patch_stats$patch_area)
+if (class(patch_stats$semester)!="factor") patch_stats$semester<- as.factor(patch_stats$semester)
+if (class(patch_stats$patch_biomass)=="factor") patch_stats$patch_biomass <-as.numeric(levels(patch_stats$patch_biomass))[as.integer(patch_stats$patch_biomass) ]               
+if (class(patch_stats$patch_biomass)=="character") patch_stats$patch_biomass <-as.numeric(patch_stats$patch_biomass)
+if (class(patch_stats$patch_fecundity)=="factor") patch_stats$patch_fecundity <-as.numeric(levels(patch_stats$patch_fecundity))[as.integer(patch_stats$patch_fecundity) ]               
+if (class(patch_stats$patch_fecundity)=="character") patch_stats$patch_fecundity <-as.numeric(patch_stats$patch_fecundity)
+                
+```
+
+
+```{r}
+# convert dispersal times into probability of successful dispersal for different loss rates
+#loss rates to iterate over
+lvals <- c(0.5, 0.6, 0.7, 0.8, 0.9, 0.99)
+
+patch_conn_lvals <- patch_conn#holding data frame to add the columns to
+
+for(i in 1:length(lvals)){# for each lval
+  
+  patch_conn_lvals[ ,dim(patch_conn)[2] + i] <- (1-lvals[i])^patch_conn$time#get the fraction surviving for all the patch pairs and make this its own column
+  
+}
+
+#name the columns as pot_conn.(lossrate)
+colnames(patch_conn_lvals) <- c(c(colnames(patch_conn)), c(paste("pot_conn", as.character(lvals), sep = "")))
+
+
+# duplicate biomass data into a dataframe for source patches and one for destination patches. Convert biomass from metric Tons to kg
+# source patch data
+source_patches <- patch_stats %>% dplyr::select(-pixel_latitude, -pixel_longitude, -patch_fecundity) %>% rename(source_patch = patch_number, source_biomass = patch_biomass, source_area= patch_area) %>% mutate(source_biomass = 1000*source_biomass)
+
+# destination (focal) patch data
+destination_patches <- patch_stats %>% dplyr::select(-pixel_latitude, -pixel_longitude, -patch_fecundity) %>% rename(patch = patch_number) %>% mutate(patch_biomass = 1000*patch_biomass)
+
+#turn the potential connectivities into realized connectivity ("biomass connectivity") by multiplying them by source patch biomass
+temp_connlvals <- left_join(patch_conn_lvals, source_patches, by = c("source_patch", "year", "semester")) %>% mutate_at(c(colnames(patch_conn_lvals[6:11])), list(~.*source_biomass)) #the list() function replaces the selected columns with the new values
+#rename these columns (are not longer pot_conn)
+temp_connlvals2 <- temp_connlvals
+colnames(temp_connlvals2) <- c(c(colnames(temp_connlvals[1:5])),c(paste("patch_conn", as.character(lvals), sep = "")), c(colnames(temp_connlvals[12:13])))#cols 1:5 and 12:13 kept the same names
+
+# now for each destination patch, sum across all source patches, join with the destination patch data, add year.sem column, and convert the destination patch area from hectares to m2. Then filter our just the patches that have transects and change formats to match with the transect data
+connvals <- temp_connlvals2 %>% filter(source_patch != destination_patch) %>%  group_by(destination_patch, year, semester) %>% summarise_at(c(colnames(temp_connlvals2[6:11])), list(~sum(.))) %>% mutate(year.sem= if_else(semester==1, as.Date(paste(year, 01, 01, sep="-")),  as.Date(paste(year, 07, 01, sep="-")))) %>% rename(patch = destination_patch) %>% left_join(destination_patches, by = c("patch", "year", "semester")) %>% mutate(patch_area_m2 = 10000*patch_area) %>% filter(patch %in% transdt$patch) %>% mutate(semester = as.numeric(semester)) %>% mutate(year.sem = as.character(year.sem)) %>% mutate(patch = as.numeric(patch), semester = as.factor(semester), year.sem = as.Date(year.sem))
+
+#head(connvals)
+
+```
+
+
+
+# combine
+
+```{r}
+# convert connectivity to 1 sem lag (default)
+patchdt1Sfull <- connvals %>% group_by(patch) %>% mutate_at(c(colnames(connvals[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# use one semester lag in connectivity as default
+full_datalvals <-left_join(transdt, patchdt1Sfull, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# check final number of patches and transects
+length(unique(full_datalvals$patch)) # 25
+length(unique(full_datalvals$transect_id)) # 52
+
+unique(full_datalvals$site.trans)
+
+```
+
+
+## Fig. 5b and c
+
+
+
+```{r}
+# make a rain cloud plot for urchins and patch connectivity
+# code adapted from: https://gist.github.com/z3tt/8b2a06d05e8fae308abbf027ce357f01
+
+pal <- c("darkseagreen", "darkgreen")#AA70C2
+
+
+# for adding sample size to the plot
+#add_sample <- function(x){
+  # return(c(y = max(x) + .025, 
+      #      label = length(x)))
+#}
+
+#View(full_datalvals)
+
+urchkelpplot <- full_datalvals %>% mutate(kelp_state =if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>0.05, 1, 0))) %>% mutate(kelp_state = as.factor(kelp_state)) %>% mutate(kelp_state = if_else(kelp_state=="1", "High", "ALow")) %>% 
+  group_by(kelp_state) %>% 
+  filter(is.na(kelp_state)==F) %>% 
+  ggplot(aes(x = kelp_state, y = urchin_dens)) + 
+  # add the distributions
+  ggdist::stat_halfeye(aes(color = kelp_state, fill = kelp_state), adjust = .5, width = .75, .width = 0, justification = -.4, point_color = NA, alpha = 0.7) + 
+  # add the data points
+  geom_point(aes(color = kelp_state), fill = "white", shape = 21, stroke = .4, size = 2, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point( aes(fill = kelp_state), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(aes(color = kelp_state), width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  scale_x_discrete(labels = c("ALow" = "Low\nkelp", "High" = "High\nkelp"))+
+  # set the y-axis (now the x-axis) range
+  scale_y_continuous(expand = c(.01, .01)) + # limits = c(0, 167), #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  scale_color_manual(values = pal, guide = "none") +
+  scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 13), axis.text = element_text(size = 12), axis.title = element_text(size = 12), axis.title.y = element_blank())+#remove gridlines and adjust label sizes. for making plot outline green: plot.background = element_rect(colour = "chartreuse1", fill=NA, size=2.5)
+  #xlab(label = "Kelp state") +
+  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ggtitle("b) Effect of urchin density on kelp state")
+#dev.off()
+
+connkelpplot <- full_datalvals %>%  mutate(kelp_state =if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>0.05, 1, 0))) %>% mutate(kelp_state = as.factor(kelp_state)) %>% mutate(kelp_state = if_else(kelp_state=="1", "High", "ALow")) %>% mutate(patch_conn0.9 = log(patch_conn0.9+1)) %>% 
+  group_by(kelp_state) %>% 
+  filter(is.na(kelp_state)==F) %>% 
+  ggplot(aes(x = kelp_state, y = patch_conn0.9)) + 
+  # add the distributions
+  ggdist::stat_halfeye(aes(color = kelp_state, fill = kelp_state), adjust = .5, width = .75, .width = 0, justification = -.4, point_color = NA, alpha = 0.7) + 
+  # add the data points
+  geom_point(aes(color = kelp_state), fill = "white", shape = 21, stroke = .4, size = 2, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point( aes(fill = kelp_state), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(aes(color = kelp_state), width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  scale_x_discrete(labels = c("ALow" = "Low\nkelp", "High" = "High\nkelp"))+
+  # set the y-axis (now the x-axis) range
+  scale_y_continuous(expand = c(.01, .01)) + # #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  scale_color_manual(values = pal, guide = "none") +
+  scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 13), axis.text = element_text(size = 12), axis.title = element_text(size = 12), axis.title.y = element_blank())+#remove gridlines and adjust label sizes. for making plot outline green: plot.background = element_rect(colour = "chartreuse1", fill=NA, size=2.5)
+  #xlab(label = "Kelp state") + 
+  ylab(label="Patch connectivity (log scale)") +
+  ggtitle("c) Effect of patch connectivity on kelp state")#+
+  #annotate("text",x=2.55, y=3.2, label="GLMM coefficient", size = 12/.pt)
+#dev.off()
+
+#urchkelpplot
+
+#connkelpplot
+
+```
+
+```{r}
+#add the GLMM coefficients as insets
+
+# values are copied from GLMM_work.Rmd (under "values for Fig. 5" section)
+patch_conndf <- data.frame(coeff = c(0.3396786), CIlow = c(0.1512273), CIhigh = c(0.5969371))
+
+urchin_densdf <- data.frame(coeff = c(-1.79924), CIlow = c(-2.786548), CIhigh = c(-1.209614))
+
+
+urchcoeffplot <- ggplot(data = urchin_densdf)+
+  geom_point(aes(x = coeff, y = 1), size = 3)+
+  geom_segment(aes(x = CIlow, y = 1, xend = CIhigh, yend=1))+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 11), axis.title = element_text(size = 12), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())+#plot.background = element_rect(colour = "black", fill=NA, size=0.5)
+  annotate("text",x=-0.62, y=1, label=expression("p=1.9x10"^-7), size = 11/.pt)+
+  xlab(label = "GLMM coefficient") +
+  scale_x_continuous(limits = c(-3, 1), expand = c(.01, .01))+
+  geom_vline(xintercept=0, linetype="dashed", color = "black", linewidth = 0.5)
+
+conncoeffplot <- ggplot(data = patch_conndf)+
+  geom_point(aes(x = coeff, y = 1), size = 3)+#size = 2.5
+  geom_segment(aes(x = CIlow, y = 1, xend = CIhigh, yend=1))+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 11), axis.title = element_text(size = 12), axis.title.x = element_text(hjust=0.35), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(), plot.background = element_rect(fill='transparent', color=NA))+#plot.background = element_rect(colour = "black", fill=NA, size=0.5)
+  annotate("text",x=-0.5, y=1, label="p=0.0015", size = 11/.pt)+
+  xlab(label = "GLMM coefficient") +
+  scale_x_continuous(limits = c(-3, 1), expand = c(.01, .01))+
+  geom_vline(xintercept=0, linetype="dashed", color = "black", linewidth = 0.5)
+
+# use viewport to add plots as insets
+vp1 <- viewport(x = 0.5, y = 0.5, width = 1, height = 1)
+vp2 <- viewport(x = 0.65, y = 0.8, width = 0.6, height = 0.2)
+
+#vp3 <- viewport(x = 0.4, y = 0.85, width = 0.6, height = 0.17)#width = 0.5, height = 0.15
+vp3 <- viewport(x = 0.4, y = 0.83, width = 0.6, height = 0.19)
+
+pdf("Urchinplot.pdf", height = 4, width = 5) # height = 4.5
+print(urchkelpplot, vp = vp1)
+print(urchcoeffplot, vp = vp2)
+dev.off()
+
+pdf("Connplot.pdf", height = 4, width = 5)
+print(connkelpplot, vp = vp1)
+print(conncoeffplot, vp = vp3)
+dev.off()
+
+```
+
+
+
+# Fig. S8
+
+Plot the frequency distribution of urchin densities in the focal patches
+
+```{r}
+#View(transdt)
+
+# get a dataframe that matches the site.trans to the patches they are in
+trans_patch <- full_datalvals %>% ungroup() %>% dplyr::select(site.trans, patch) %>% dplyr::distinct()
+
+#View(trans_patch)
+
+# get the mean urchin densities from transects within focal transects
+# lter
+lter_patch_urchins <- lter_urchins %>% filter(site.trans %in% trans_patch$site.trans) %>% left_join(trans_patch, by = "site.trans") %>% mutate(year = year(date)) %>% group_by(patch, year) %>% summarize(urchin_dens = mean(urchin_dens, na.rm = T))
+
+#View(lter_patch_urchins)
+
+# kfm
+kfm_patch_urchins <- kfm_urchins %>% filter(site.trans %in% trans_patch$site.trans)%>% left_join(trans_patch, by = "site.trans")%>% mutate(year = year(date)) %>% group_by(patch, year) %>% summarize(urchin_dens = mean(urchin_dens, na.rm = T))
+
+#View(kfm_patch_urchins)
+
+# see what percent of urchin densities are less than 5 ind/m2
+length(which(lter_patch_urchins$urchin_dens<5))/length(lter_patch_urchins$urchin_dens)
+
+length(which(kfm_patch_urchins$urchin_dens<5))/length(kfm_patch_urchins$urchin_dens)
+
+(length(which(lter_patch_urchins$urchin_dens<5)) + length(which(kfm_patch_urchins$urchin_dens<5)))/(length(lter_patch_urchins$urchin_dens) + length(kfm_patch_urchins$urchin_dens))
+
+```
+
+plot Fig. S8
+```{r}
+
+mainurchplot <- lter_patch_urchins %>% 
+ggplot(aes(x = patch, y = urchin_dens)) + 
+  # add the data points
+  geom_point(color = "black", fill = "white", shape = 21, stroke = .4, size = 1.5, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point(fill = "black", color = "transparent", shape = 21, stroke = .4, size = 1.5, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(color = "black", width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  #scale_x_discrete(labels = c("ALow" = "Low\nkelp", "High" = "High\nkelp"))+
+  # set the y-axis (now the x-axis) range
+  scale_y_continuous(limits = c(-1, 155), expand = c(.01, .01)) + # #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  #scale_color_manual(values = pal, guide = "none") +
+  #scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes #, axis.title.y = element_blank()
+  xlab(label = "Patch") + 
+  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ggtitle("a) Mainland patches")
+#dev.off()
+
+islurchplot <- kfm_patch_urchins %>% 
+ggplot(aes(x = patch, y = urchin_dens)) + 
+  # add the data points
+  geom_point(color = "black", fill = "white", shape = 21, stroke = .4, size = 1.5, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point(fill = "black", color = "transparent", shape = 21, stroke = .4, size = 1.5, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(color = "black", width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  #scale_x_discrete(labels = c("ALow" = "Low\nkelp", "High" = "High\nkelp"))+
+  # set the y-axis (now the x-axis) range
+  scale_y_continuous(limits = c(-1, 155), expand = c(.01, .01)) + # #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  #scale_color_manual(values = pal, guide = "none") +
+  #scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes
+  xlab(label = "Patch") + 
+  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ggtitle("b) Island patches")
+#dev.off()
+
+
+urchdistplot <- ggarrange(mainurchplot, islurchplot, ncol = 1, nrow = 2, align  = "hv")
+
+
+pdf("Urchdist.pdf", width = 5, height = 6.5)
+urchdistplot
+dev.off()
+
+```
+
+
+
+# export data
+
+export the benthic data and patch data to be used for GLMM work
+
+```{r}
+write.csv(transdt, "../../../intermediate_data_output/GLMM_data/benthic_data.csv")
+
+write.csv(connvals, "../../../intermediate_data_output/GLMM_data/patch_data.csv")
+
+
+```
+
+
+export the swell height data to be used for random effects parameters
+
+```{r}
+
+write.csv(lter_waves, "../../../intermediate_data_output/GLMM_data/lter_waves.csv")
+
+write.csv(kfm_waves, "../../../intermediate_data_output/GLMM_data/kfm_waves.csv")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

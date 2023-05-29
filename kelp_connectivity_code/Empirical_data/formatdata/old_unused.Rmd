@@ -1,0 +1,444 @@
+---
+title: "old_unused"
+author: "Raine Detmer"
+date: "5/1/2023"
+output: html_document
+---
+
+README: old code from "format_data" that isn't used or was updated for something new
+
+citation info
+
+```{r}
+citation("deSolve")
+
+citation("lme4")
+
+citation()
+```
+
+# transect data
+
+getting the sbc lter transects before using the single link
+
+```{r}
+# read in the data on the sbc lter transect coordinates and approximate headings
+# the .. moves up one file path from the current one; the following code assumes a file structure of "name of github repo"/kelp_connectivity_code/Empirical_data/formatdata, where "name of github repo" also includes the "intermediate_data_output" folder
+sbctrans <- read.csv("../../../intermediate_data_output/transect_locations/SBC_LTER_transects.csv")
+
+#make the longitudes negative
+sbctrans$Long <- -1*sbctrans$Long
+
+#add site.trans column
+sbctrans$site.trans <- paste(sbctrans$Site,sbctrans$Transect, sep = ".")
+
+# NOTE these include more transects than the public version so added these separately (but these transects didn't have data during the 2000-2006 period so it shouldn't change anything either way)
+
+```
+
+```{r}
+
+# before I found the LTE coordinates:
+sbctransnew <- data.frame(
+  Site = c('AQUE','AQUE','CARP','CARP','IVEE','MOHK','MOHK','NAPL','NAPL'),
+  Transect = c(7,8,9,10,4,3,4,9,10),
+  Lat = c(34.4674,34.467283,34.391117,34.391217,34.40445,34.3938,34.394,34.42215,34.422033),
+  Long = c(-120.117783,-120.117783,-119.541117,-119.541183,-119.862583,-119.729483,-119.729417,-119.951217,-119.951217),
+  site.trans = c("AQUE.7",  "AQUE.8",  "CARP.9",  "CARP.10", "IVEE.4",  "MOHK.3",  "MOHK.4", "NAPL.9",  "NAPL.10"),
+  heading = c(95,90,80,90,90,55,270,90,90)
+)
+
+sbctrans1.3 <- left_join(sbctrans1.2, sbcheadings, by = c("site.trans"))
+
+sbctrans1.3 <- rbind(sbctrans1.3, sbctransnew) %>% arrange(Site)
+
+# comparing the old and new versions to make sure nothing changed
+
+#dplyr::setdiff(sbctrans$site.trans, sbctrans1.3$site.trans) # older version includes more transects than the public version so added these separately (but these transects didn't have data during the 2000-2006 period so it shouldn't change anything either way)
+
+
+# some lat/longs were slightly different (for "CARP.4", "CARP.5", "IVEE.3", "NAPL.3", "NAPL.4", "SCDI.3", "SCTW.3") but it didn't change which patches they were in
+test1 <- left_join(sbctrans1.3, sbctrans, by = c("Site", "Transect", "site.trans"))
+
+View(test1[which(test1$Lat.x != test1$Lat.y),])
+
+View(test1[which(test1$Long.x != test1$Long.y),])
+
+patch_sbc_match3.1 <- patch_sbc_match2 %>% group_by(site.trans) %>% summarize(patch = getmode(patch), npix = n())
+
+View(patch_sbc_match3)
+View(patch_sbc_match3.1)
+
+dplyr::setdiff(patch_sbc_match3.1$patch, patch_sbc_match3$patch)
+
+patch_sbc_match3[which(patch_sbc_match3$site.trans %in% c("CARP.4", "CARP.5", "IVEE.3", "NAPL.3", "NAPL.4", "SCDI.3", "SCTW.3")),]
+
+patch_sbc_match3.1[which(patch_sbc_match3.1$site.trans %in% c("CARP.4", "CARP.5", "IVEE.3", "NAPL.3", "NAPL.4", "SCDI.3", "SCTW.3")),]
+
+```
+
+
+TRICK FOR ADDING COMMAS
+
+```{r}
+#paste("'", sbctrans$site.trans, "'", sep="", collapse=",")
+#paste("", sbctrans$heading, "", sep="", collapse=",")
+
+#paste("", sbctrans$heading[which(sbctrans$site.trans %in% c("AQUE.7",  "AQUE.8",  "CARP.9",  "CARP.10", "IVEE.4",  "MOHK.3",  "MOHK.4", "NAPL.9",  "NAPL.10"))], "", sep="", collapse=",")
+
+```
+
+# metapop map
+
+```{r}
+# first make a dataframe:
+#citycoords.df <- data.frame(c("Santa Barbara", "Los Angeles"), c(34.4208, 34.0522), c(-119.6982, -118.2437))
+#colnames(citycoords.df) <- c("city", "lat", "lon")
+
+# now convert it to sf object
+#citysf <- st_as_sf(citycoords.df, coords = c("lon", "lat"))
+
+#st_crs(citysf) <- 4326#set the crs
+
+#convert to utm
+#citysf2 <- st_transform(citysf, 32611)#change the spatial reference system to utm zone 11
+
+
+```
+
+```{r}
+pdf("Metapopmap.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray80", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = patchmerge_all, color = "darkolivegreen", fill = "darkolivegreen", size = 1)+#goldenrod2
+  geom_sf(data = patchcenter, color = "black", fill = "chartreuse1", size = 2.25, shape=23)+#shape = 23 makes diamond
+  #geom_sf_text(data = citysf2, aes(label = city),color = "black", size = 3)+
+  annotate(geom = "text", x = -119.6982-0.01, y = 34.4208+0.075, size = 3.5, label = "Santa Barbara", color = "black")+#fontface = "bold"
+  annotate(geom = "text", x = -118.2437, y = 34.0522, size = 3.5, label = "Los Angeles", color = "black")+#fontface = "bold"
+  #geom_sf(data = bounds_main, color = "red", fill = NA, lwd = 0.8)+
+  #geom_sf(data = bounds_nci, color = "blue", fill = NA, lwd = 0.8)+
+  #geom_sf(data = bounds_sbi, color = "blue", fill = NA, lwd = 0.8)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray96', color = 'gray96'), axis.text.x = element_text(size = 12), axis.text.y = element_text(size = 12), axis.title = element_blank())+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_x_discrete(breaks = c(-120, -119, -118))+#specify xaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm"), text_cex=0.9)+
+  #annotation_north_arrow(location = "bl", style = north_arrow_orienteering(text_size = 8), height = unit(0.5, "cm"), width = unit(0.5, "cm"), pad_x = unit(0.25, "cm"), pad_y = unit(1, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  annotation_north_arrow(location = "tr", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  #coord_sf(xlim = c(-120.754, -117.129), ylim = c(32.504, 35.178), expand = F)# make the map go all the way to the edges of the plot
+  coord_sf(xlim = c(-120.754, -117.129), ylim = c(32.504, 34.7), expand = F)# make the map go all the way to the edges of the plot
+#coord_sf(xlim = c(-120.6093 , -117.2381), ylim = c(32.64389, 34.55651), expand = F)# make the map go all the way to the edges of the plot
+dev.off()
+
+```
+
+
+Re: changing map aspect ratios -> can't just change the plot aspect ratio because it distorts the map projection. Instead need to just change the coordinate limits to plot a taller or wider area
+see https://stackoverflow.com/questions/66958367/ggplot2-and-sf-coord-fixed-doesnt-work-combined-with-geom-sf-and-coord-sf 
+
+using ggsave:
+
+```{r}
+
+#packageVersion("deSolve") #1.31
+
+#metapop_map <- [the ggplot code]
+
+#ggsave(filename = "Metapopmap2.pdf", plot = metapop_map, device = "pdf", width = 10, height = 2)
+```
+
+square version
+```{r}
+pdf("Metapopmap2.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray85", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = patchmerge_all, color = "darkolivegreen", fill = "darkolivegreen", linewidth=2.25)+#note as og ggplot v3.4.0, need to use linewidth instead of size to change the size of the sf objects
+  geom_sf(data = patchcenter, color = "black", fill = "chartreuse1", size = 4, shape=23)+#shape = 23 makes diamond
+  #geom_sf_text(data = citysf2, aes(label = city),color = "black", size = 3)+
+  annotate(geom = "text", x = -119.6982-0.01, y = 34.4208+0.1, size = 5, label = "Santa Barbara", color = "black")+#size = 3.5, fontface = "bold", x = -119.6982-0.01, y = 34.4208+0.075
+  annotate(geom = "text", x = -118.45, y = 34.0522, size = 5, label = "Los", color = "black")+#fontface = "bold" #x = -118.2437, y = 34.0522
+  annotate(geom = "text", x = -118.45, y = 33.98, size = 5, label = "Angeles", color = "black")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray99', color = 'gray99'), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 16), axis.title = element_blank(), panel.border = element_rect(colour = "black", fill=NA, linewidth=0.8), plot.title = element_text(hjust=0, size = 16))+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_x_discrete(breaks = c(-120, -119, -118))+#specify xaxis labels
+  scale_y_discrete(breaks = c(33, 34))+#specify yaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(1.2, "cm"), pad_y = unit(0.45, "cm"), text_cex=1.2)+#text_cex=0.9, pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm")
+  annotation_north_arrow(location = "bl", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"), pad_y = unit(0.35, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  coord_sf(xlim = c(-120.754, -117.129), ylim = c(32.504, 34.7), expand = F) +# make the map go all the way to the edges of the plot
+  ggtitle("a) Southern California giant kelp metapopulation")
+dev.off()
+
+```
+
+wide version
+
+```{r}
+pdf("Metapopmap2.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray85", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = patchmerge_all, color = "darkolivegreen", fill = "darkolivegreen", linewidth=2.25)+#note as og ggplot v3.4.0, need to use linewidth instead of size to change the size of the sf objects
+  geom_sf(data = patchcenter, color = "black", fill = "chartreuse1", size = 4, shape=23)+#shape = 23 makes diamond
+  #annotate(geom = "text", x = -119.6982-0.01, y = 34.4208+0.1, size = 5, label = "Santa Barbara", color = "black")+#size = 3.5, fontface = "bold", x = -119.6982-0.01, y = 34.4208+0.075
+  #annotate(geom = "text", x = -118.45, y = 34.0522, size = 5, label = "Los", color = "black")+#fontface = "bold" #x = -118.2437, y = 34.0522
+  #annotate(geom = "text", x = -118.45, y = 33.98, size = 5, label = "Angeles", color = "black")+
+  annotate(geom = "text", x = -119.6982 + 0.12, y = 34.4208+0.12, size = 5, label = "Santa Barbara", color = "black")+#fontface = "bold"
+  annotate(geom = "text", x = -118.2437 + 0.1, y = 34.0522, size = 5, label = "Los Angeles", color = "black")+#fontface = "bold"
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray99', color = 'gray99'), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 16), axis.title = element_blank(), panel.border = element_rect(colour = "black", fill=NA, linewidth=0.8), plot.title = element_text(hjust=0, size = 16))+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_x_discrete(breaks = c(-120, -119, -118))+#specify xaxis labels
+  scale_y_discrete(breaks = c(33, 34))+#specify yaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(1.2, "cm"), pad_y = unit(0.45, "cm"), text_cex=1.2)+#text_cex=0.9, pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm")
+  annotation_north_arrow(location = "bl", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"), pad_y = unit(0.35, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  coord_sf(xlim = c(-120.754, -117.129), ylim = c(32.504, 34.7), expand = F) +# make the map go all the way to the edges of the plot
+  ggtitle("a) Southern California giant kelp metapopulation")+
+  theme(aspect.ratio=0.52) # make the plot wider than tall
+dev.off()
+
+```
+
+narrow version
+
+
+```{r}
+pdf("Metapopmap2.pdf")
+ggplot() +
+    geom_sf(data = shore_full, fill = "gray85", color = NA)+# fill = color to make the land, color = NA removes the border around the land
+  geom_sf(data = patchmerge_all, color = "darkolivegreen", fill = "darkolivegreen", linewidth=2.25)+#note as og ggplot v3.4.0, need to use linewidth instead of size to change the size of the sf objects
+  geom_sf(data = patchcenter, color = "black", fill = "chartreuse1", size = 4, shape=23)+#shape = 23 makes diamond
+  #annotate(geom = "text", x = -119.6982-0.01, y = 34.4208+0.1, size = 5, label = "Santa Barbara", color = "black")+#size = 3.5, fontface = "bold", x = -119.6982-0.01, y = 34.4208+0.075
+  #annotate(geom = "text", x = -118.45, y = 34.0522, size = 5, label = "Los", color = "black")+#fontface = "bold" #x = -118.2437, y = 34.0522
+  #annotate(geom = "text", x = -118.45, y = 33.98, size = 5, label = "Angeles", color = "black")+
+  annotate(geom = "text", x = -119.6982 + 0.1, y = 34.4208 + 0.08, size = 5, label = "Santa Barbara", color = "black")+#fontface = "bold"
+  annotate(geom = "text", x = -118.2437 + 0.1, y = 34.0522, size = 5, label = "Los Angeles", color = "black")+#fontface = "bold"
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = 'gray99', color = 'gray99'), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 16), axis.title = element_blank(), panel.border = element_rect(colour = "black", fill=NA, linewidth=0.8), plot.title = element_text(hjust=0, size = 16))+# remove gridlines, change background (=ocean) color, change size of x and y axis labels, remove axis titles
+  scale_x_discrete(breaks = c(-120, -119, -118))+#specify xaxis labels
+  scale_y_discrete(breaks = c(33, 34))+#specify yaxis labels
+  annotation_scale(location = "bl", style = "ticks",  pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm"), text_cex=1.2)+#text_cex=0.9, pad_x = unit(0.25, "cm"), pad_y = unit(0.45, "cm")
+  annotation_north_arrow(location = "tr", style = north_arrow_orienteering(text_size = 11), height = unit(0.7, "cm"), width = unit(0.7, "cm"), pad_y = unit(0.35, "cm"))+# change the padding to adjust north arrow location in the specified corner
+  coord_sf(xlim = c(-120.754, -117.129), ylim = c(32.504, 34.7), expand = F) +# make the map go all the way to the edges of the plot
+  ggtitle("a) Southern California giant kelp metapopulation")+
+  theme(aspect.ratio=1.1) # make the plot taller than wide
+dev.off()
+
+
+
+```
+
+# data figure
+
+## Fig SXa
+
+urchin vs. kelp state
+
+
+```{r}
+#library("ggdist")
+
+#installing the source packages ‘lifecycle’, ‘scales’, ‘ggplot2’, ‘HDInterval’, ‘distributional’, ‘ggdist’
+
+#Error in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]) : 
+  #namespace ‘rlang’ 1.0.2 is being loaded, but >= 1.0.6 is required
+#installation of package ‘lifecycle’ had non-zero exit status
+
+#Error in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]) : 
+  #namespace ‘ggplot2’ 3.3.3 is being loaded, but >= 3.4.0 is required
+
+# needed to update these packages by installing them from source
+
+
+
+```
+
+```{r}
+# try a raincloud plot showing the distribution of urchin densities in each kelp state
+# code adapted from: https://gist.github.com/z3tt/8b2a06d05e8fae308abbf027ce357f01
+
+
+pal <- c("#8F9591", "darkgoldenrod")#AA70C2
+
+# for adding sample size to the plot
+#add_sample <- function(x){
+  # return(c(y = max(x) + .025, 
+      #      label = length(x)))
+#}
+
+
+#pdf("Urchinskelp.pdf")
+urchkelpplot <- transdt %>% mutate(kelp_state =if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>0.05, 1, 0))) %>% mutate(kelp_state = as.factor(kelp_state)) %>% mutate(kelp_state = if_else(kelp_state=="1", "High", "ALow")) %>% 
+  group_by(kelp_state) %>% 
+  filter(is.na(kelp_state)==F) %>% 
+  ggplot(aes(x = kelp_state, y = urchin_dens)) + 
+  # add the distributions
+  ggdist::stat_halfeye(aes(color = kelp_state, fill = kelp_state), adjust = .5, width = .75, .width = 0, justification = -.4, point_color = NA, alpha = 0.7) + 
+  # add the data points
+  geom_point(aes(color = kelp_state), fill = "white", shape = 21, stroke = .4, size = 2, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point( aes(fill = kelp_state), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(aes(color = kelp_state), width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  scale_x_discrete(labels = c("ALow" = "Low", "High" = "High"))+
+  # set the y-axis (now the x-axis) range
+  scale_y_continuous(limits = c(0, 165), expand = c(.001, .001)) + # #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  scale_color_manual(values = pal, guide = "none") +
+  scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes
+  xlab(label = "Kelp state") +
+  ylab(label="Urchin density (individuals/m2)") +
+  ggtitle("a) Urchin densities and kelp state")
+#dev.off()
+
+```
+
+or something like
+```{r}
+#par(oma = c(0, 0, 0, 0))
+par(mfrow = c(2, 1))
+par(mai=c(0,0.8,0,0.01))
+hist(transdt$urchin_dens[which(transdt$kelp_dens > 0.05)], n=40, col = "gray80", xlab = NA, ylab = NA, main = NA, ylim = c(0, 120), xlim = c(0, 168), xaxt = "n", las = 1)# n=60
+#mtext("b) Transect-level observations", side=3, cex=1, adj = 0,line = 0)
+#mtext("Frequency", side = 2, line = 2)
+legend(x=100, y = 300, c("low", "high"), fill = c("gray80", "gray40"), bty="n", ncol=1, title = "Kelp state")#darkolivegreen2
+hist(transdt$urchin_dens[which(transdt$kelp_dens<= 0.05)], n = 60,col ="gray80", ylim = c(70,0), main = NA, xlab = NA, ylab = NA, las = 1)# , border = NA, n=60, #A379AF
+mtext("Urchin density (ind/m2)", side = 1, line = 2)
+
+```
+
+
+## Fig SXb
+
+patch connectivity and kelp state
+
+```{r}
+# convert connectivity to 1 sem lag (default)
+#patchdt1Sfull <- patchdt %>% group_by(patch) %>% mutate_at(c(colnames(patchdt[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# use one semester lag in connectivity as default
+#full_datalvals <-left_join(benthicdt, patchdt1Sfull, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+
+#full_data_for_mod <- full_datalvals %>% mutate_at(c(colnames(full_datalvals[c(6,15:20)])), list(~ log1fun(.))) %>% mutate(patch_area = log(patch_area)) %>% mutate(kelp_status=if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>thresh, 1, 0)))%>% mutate(fyear = as.factor(year), patch = as.factor(patch), transect_id = as.factor(transect_id)) ##ATTENTION: using mutate_at doesn't change the names of the columns, so they won't be labeled as L but the are still log transformed. And connectivity is also 1 sem lag
+
+connkelpplot <- connvals %>% group_by(patch) %>% mutate_at(c(colnames(connvals[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup() %>% right_join(transdt, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F) %>%  mutate(kelp_state =if_else(is.na(kelp_dens)==T, as.numeric(NA), if_else(kelp_dens>0.05, 1, 0))) %>% mutate(kelp_state = as.factor(kelp_state)) %>% mutate(kelp_state = if_else(kelp_state=="1", "High", "ALow")) %>% mutate(patch_conn0.9 = log(patch_conn0.9+1)) %>% 
+  group_by(kelp_state) %>% 
+  filter(is.na(kelp_state)==F) %>% 
+  ggplot(aes(x = kelp_state, y = patch_conn0.9)) + 
+  # add the distributions
+  ggdist::stat_halfeye(aes(color = kelp_state, fill = kelp_state), adjust = .5, width = .75, .width = 0, justification = -.4, point_color = NA, alpha = 0.7) + 
+  # add the data points
+  geom_point(aes(color = kelp_state), fill = "white", shape = 21, stroke = .4, size = 2, position = position_jitter(seed = 1, width = .12)) + 
+  # add more points on top (to make them lighter)
+  geom_point( aes(fill = kelp_state), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3,
+    position = position_jitter(seed = 1, width = .12)) + 
+  # add the boxplots
+  geom_boxplot(aes(color = kelp_state), width = .42, outlier.shape = NA, alpha = 0.2, lwd = 1) + # alpha to make them transparent
+  # add the sample sizes
+  #stat_summary( geom = "text", fun.data = add_sample, aes(label = paste("n =", ..label..), color = kelp_state), size = 4, hjust = 0, fontface = "bold") +
+  # flip the coordinates
+  coord_flip() +
+  scale_x_discrete(labels = c("ALow" = "Low", "High" = "High"))+
+  # set the y-axis (now the x-axis) range
+  #scale_y_continuous(limits = c(0, 165), expand = c(.001, .001)) + # #breaks = seq(1.6, 3.8, by = .2),
+  # set the colors
+  scale_color_manual(values = pal, guide = "none") +
+  scale_fill_manual(values = pal, guide = "none")+
+  theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes
+  xlab(label = "Kelp state") +
+  ylab(label="Patch connectivity (log scale)") +
+  ggtitle("b) Patch connectivity and kelp state")
+#dev.off()
+
+
+```
+
+```{r}
+
+urchkelpplot
+
+library("ggpubr") # for ggarrange()
+
+# see https://rpkgs.datanovia.com/ggpubr/reference/ggarrange.html
+
+
+datafig <- ggarrange(urchkelpplot, connkelpplot + rremove("ylab"), ncol = 2, nrow = 1, align  = "hv")
+
+
+pdf("Datafig.pdf", height = 3, width = 8)
+datafig
+dev.off()
+
+
+```
+
+# GLMM work
+
+getting transect lat and lon before changing to using the published datasets
+```{r}
+# need to get the lat and lon of each transect
+# LTER transect coordinates
+#sbc_coords <- read.csv("../../../intermediate_data_output/transect_locations/SBC_LTER_transects.csv") %>% mutate(Long = -1*Long) %>% rename(Latitude = Lat, Longitude=Long) %>% mutate(site.trans = paste(Site, Transect, sep = ".")) %>% dplyr::select(-heading, -Site, -Transect)
+
+# KFM transect coordinates
+#kfm_coords <- read.csv("../../../intermediate_data_output/transect_locations/CINP_KFMP_transects.csv") %>% dplyr::select(Site, Latitude, Longitude) %>% mutate(Site = as.factor(Site)) %>% rename(site_name = Site)
+
+```
+
+
+
+# patch distances
+calculate the physical ("as the crow flies") distances between the centers of the patches in the metapopulation
+
+In discussion about need for more empirical work on whether drift exchange happens and over what scales: “the mean distance between each patch and its nearest neighbor is blank (SE) for the subset used here and blank (SE) for the metapop as a whole” (maybe supp figure showing distribution?), suggesting that drift would not have to travel very far."
+
+
+
+```{r}
+#patch_stats # patch biomass dataset, includes the coordinates of the patch centers
+#head(patch_stats)
+
+patch_dist <- patch_stats %>% rename(latitude = pixel_latitude, longitude = pixel_longitude, patch = patch_number) %>% dplyr::select(patch, latitude, longitude) %>% dplyr::distinct() %>% dplyr::arrange(patch)# use distinct() since there are repeated biomass measurements for each patch
+
+#View(patch_dist)
+
+# make this a spatial object
+patch_distsf <- patch_dist %>% st_as_sf(coords = c("longitude","latitude")) %>% st_set_crs(4326)
+
+#patchsf
+
+#get distance matrix with all pairwise distances 
+patch_distm <- st_distance(patch_distsf)
+
+#dim(patch_distm)#469 x 469
+
+patch.grid <- as.data.frame(expand.grid(c(1:469), c(1:469)))
+#View(patch.grid)
+
+# turn into data frame
+#as.numeric(patchdist)# makes a vector, where entries 1:469 = distance between patch 1 and patch 1:469, entries 470: 470+469 = distance between patch 2 and patches 1:469, etc.
+patchdist.df <- as.data.frame(as.numeric(patch_distm))
+colnames(patchdist.df) <- c("distance")
+
+#View(patchdist.df)
+
+patchdist.df$source_patch <- patch.grid[ ,2]
+patchdist.df$destination_patch <- patch.grid[,1]
+
+#View(patchdist.df)
+
+# change distance from m to km, also change source and destination patches to factors, and filter out cases where source = destination, then get the closest neighbor to each patch
+patchdist.df2 <- patchdist.df %>% mutate(source_patch = as.factor(source_patch), destination_patch = as.factor(destination_patch), distance = distance/1000) %>% filter(distance !=0) %>% group_by(destination_patch) %>% summarize(mindist = min(distance)) %>% ungroup()
+
+#View(patchdist.df2)
+
+#hist(patchdist.df2$mindist)
+
+mean(patchdist.df2$mindist) # 1.1 km
+
+mean(patchdist.df2$mindist[which(patchdist.df2$destination_patch %in% full_datalvals$patch)])#1.34 km
+
+#hist(patchdist.df2$mindist[which(patchdist.df2$destination_patch %in% full_datalvals$patch)])
+
+```
