@@ -1,0 +1,1782 @@
+---
+title: "ODE_main_figs"
+author: "Raine Detmer"
+date: "4/6/2023"
+output: html_document
+---
+
+README: code for making Figures 2, 3, and 4
+
+# packages
+
+```{r}
+library(deSolve)
+
+library(tictoc) # for timing simulations
+
+library(tidyverse)
+
+library("ggpubr")
+
+
+```
+
+
+# define model
+
+## default parameters
+
+```{r}
+# local parameters
+rho = 10 #kelp reproduction rate (spores/kg adults/d)
+rG = 0.05 #gametophyte maturation rate
+muG = 0.6 # gametophyte mortality rate
+rJ = 0.004 #juvenile sporophyte growth rate
+muJ = 0.01 #juvenile sporophyte mortality rate
+K = 1 # adult carrying capacity (1 patch model)
+K1 = 1 #adult carrying capacity in patch 1 (2 patch model)
+K2 = 1 #adult carrying capacity in patch 2 (2 patch model)
+muA = 0.002 #adult mortality rate 
+qG = 1.2 # G's vulnerability to grazing relative to adults
+qJ = 1.2 # J's vulnerability to grazing relative to adults
+g = 0.025 #max urchin grazing rate on adults
+p = 0.1 #proportional reduction in active grazing when production = consumption
+d = 0.024 #fraction of biomass that becomes detritus
+gd = 0.0011 #rate of urchin grazing on detritus
+b = 7 #mean biomass per adult kelp plant 
+u = 0 #urchin density (1 patch model)
+u1 = 0 #urchin density in patch 1 (2 patch model)
+u2 = 0 #urchin density in patch 2 (2 patch model)
+
+
+#patch connectivities
+cs1 = 0# fraction of spores leaving patch 1 that go to patch 2 (2 patch model)
+cs2 = 0# fraction of spores leaving patch 2 that go to patch 1 (2 patch model)
+cd1 = 0# fraction of drift kelp leaving patch 1 that go to patch 2 (2 patch model)
+cd2 = 0 # fraction of drift kelp leaving patch 2 that go to patch 1 (2 patch model)
+exts = 0 # external spore input (1 patch model); NOTE in the main text ext_ is replaced with epsilon_
+exts1 = 0 #external spore input in patch 1 (2 patch model)
+exts2 = 0 #external spore input in patch 2 (2 patch model) 
+extd = 0 # external drift input (1 patch model)
+extd1 = 0 #external drift input in patch 1 (2 patch model)
+extd2 = 0 #external drift input in patch 2 (2 patch model)
+ls = 0.5 #fraction of spores that leave patch (1 patch model)
+ls1 = 0.5 #fraction of spores that leave patch 1 (2 patch model)
+ls2 = 0.5 #fraction of spores that leave patch 2 (2 patch model)
+ld = 0.5  #fraction of detritus that leaves patch (1 patch model)
+ld1 = 0.5 #fraction of detritus that leaves patch 1 (2 patch model)
+ld2 = 0.5 #fraction of detritus that leaves patch 2 (2 patch model)
+
+```
+
+## one patch
+
+```{r}
+# define function for running the single patch ODE model in deSolve (see main text for a description of the equations; note B(u, A) is equivalent to "graze" below)
+mod.fun1 <- function (t, state, params) {
+  with(as.list(c(state, params)), {
+    
+    if(u == 0){
+    graze <- 0
+  } else{
+    graze <- 1/(1+(1-p)/p*((extd + (1-ld)*A*b*d)/(gd*u))^2)
+  }
+    
+    # ODE equations
+  dGdt <-  exts + (1-ls)*b*rho*A - rG*G - qG*g*u*graze*G - muG*G*G #gametophytes
+  dJdt <-  0.5*rG*G- rJ*J - qJ*g*u*graze*J - muJ*J*J#juveniles
+  dAdt <-  rJ*J*(1-A/K) - g*u*graze*A - muA*A#adults
+  
+  return(list(c(dGdt, dJdt, dAdt)))
+  })
+    
+}
+
+```
+
+## two patch
+
+```{r}
+# define function for running the two patch model in deSolve (see main text for a description of the equations; note B(u, A) is equivalent to "graze" below)
+mod.fun2 <- function (t, state2, params2) {
+  with(as.list(c(state2, params2)), {
+    
+     #grazing in patch 1 
+    if(u1 == 0){
+    graze1 <- 0
+  } else{
+    graze1 <- 1/(1+(1-p)/p*((extd1 + (1-ld1)*A1*b*d + ld2*cd2*b*d*A2)/(gd*u1))^2)
+  }
+     
+     #grazing in patch 2 (focal patch)
+     if(u2 == 0){
+    graze2 <- 0
+  } else{
+    graze2 <- 1/(1+(1-p)/p*((extd2 + (1-ld2)*A2*b*d + ld1*cd1*b*d*A1)/(gd*u2))^2)
+  }
+    
+    # ODE equations
+  dG1dt <-  exts1 + (1-ls1)*b*rho*A1 + ls2*cs2*rho*b*A2 - rG*G1 - qG*g*u1*graze1*G1 - muG*G1*G1 #gametophytes
+  dJ1dt <-  0.5*rG*G1- rJ*J1 - qJ*g*u1*graze1*J1 - muJ*J1*J1#juveniles
+  dA1dt <-  rJ*J1*(1-A1/K1) - g*u1*graze1*A1 - muA*A1#adults
+  
+  dG2dt <-  exts2 + (1-ls2)*b*rho*A2 + ls1*cs1*rho*b*A1 - rG*G2 - qG*g*u2*graze2*G2 - muG*G2*G2 #gametophytes
+  dJ2dt <-  0.5*rG*G2- rJ*J2 - qJ*g*u2*graze2*J2 - muJ*J2*J2#juveniles
+  dA2dt <-  rJ*J2*(1-A2/K2) - g*u2*graze2*A2 - muA*A2#adults
+  
+  
+  return(list(c(dG1dt, dJ1dt, dA1dt, dG2dt, dJ2dt, dA2dt)))
+  })
+    
+}
+
+
+```
+
+# Figure 2
+
+## equilibrium production
+
+calculate the spore and drift production rates in an isolated (i.e., not receiving any external input), urchin free patch and use these as the maximum possible inputs for the focal patch in the bifurcation analyses
+
+```{r}
+#parameters
+params0 = c(exts=0, extd=0, ls, ld, rho, rG, muG, rJ, muJ, K, muA, qG, qJ, g, p, d, gd, b, u = 0)
+
+# initial conditions
+xic0 <- c(G = 10, J= 5, A= 1)
+
+#time steps
+times0 = seq(from = 0, to = 4000, length.out = 4000)
+
+#run the model using the ode() function from the deSolve package
+results0 <- ode(xic0, times0, mod.fun1, params0, method = "lsodes")
+colnames(results0) = c("time", "G", "J", "A") # name the results
+
+# calculate the equilibrium production rates
+unname(results0[length(times0), "A"])*rho*b*ls#spore production in the patch x fraction that leave the patch
+unname(results0[length(times0), "A"])*b*d*ld#drift production in the patch x fraction that leaves the patch
+
+
+```
+
+So choose a max spore input rate of 31 and a max drift input rate of 0.075 (see "ODE_bifurcation_analyses.nb" for the bifurcation analyses in Mathematica)
+
+
+import the results from the bifurcation analyses run in Mathematica:
+
+```{r}
+# no conn, stable eq
+noConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/noConnStab.csv", header = FALSE)
+colnames(noConnStab) <- c("urchins", "Astar")
+# spores only, low conn, stable eq
+sLConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sLConnStab.csv", header = FALSE)
+colnames(sLConnStab) <- c("urchins", "Astar")
+# spores only, high conn, stable eq
+sHConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sHConnStab.csv", header = FALSE)
+colnames(sHConnStab) <- c("urchins", "Astar")
+# drift only, low conn, stable eq
+dLConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/dLConnStab.csv", header = FALSE)
+colnames(dLConnStab) <- c("urchins", "Astar")
+# drift only, high conn, stable eq
+dHConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/dHConnStab.csv", header = FALSE)
+colnames(dHConnStab) <- c("urchins", "Astar")
+# spores and drift, low conn, stable eq
+sdLConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sdLConnStab.csv", header = FALSE)
+colnames(sdLConnStab) <- c("urchins", "Astar")
+# spores and drift, high conn, stable eq
+sdHConnStab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sdHConnStab.csv", header = FALSE)
+colnames(sdHConnStab) <- c("urchins", "Astar")
+
+# no conn, unstable eq
+noConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/noConnUnstab.csv", header = FALSE)
+colnames(noConnUnstab) <- c("urchins", "Astar")
+# spores only, low conn, unstable eq
+sLConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sLConnUnstab.csv", header = FALSE)
+colnames(sLConnUnstab) <- c("urchins", "Astar")
+# spores only, high conn, unstable eq
+sHConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sHConnUnstab.csv", header = FALSE)
+colnames(sHConnUnstab) <- c("urchins", "Astar")
+# drift only, low conn, unstable eq
+dLConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/dLConnUnstab.csv", header = FALSE)
+colnames(dLConnUnstab) <- c("urchins", "Astar")
+# drift only, high conn, unstable eq
+dHConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/dHConnUnstab.csv", header = FALSE)
+colnames(dHConnUnstab) <- c("urchins", "Astar")
+# spores and drift, low conn, unstable eq
+sdLConnUnstab <- read.csv("../../../intermediate_data_output/mathematica_output/bifur_main/sdLConnUnstab.csv", header = FALSE)
+colnames(sdLConnUnstab) <- c("urchins", "Astar")
+# spores and drift, high conn, unstable eq: doesn't exist
+#sdHConnUnstab <- read.csv("sdHConnUnstab.csv", header = FALSE)
+#colnames(sdHConnUnstab) <- c("urchins", "Astar")
+
+```
+
+```{r}
+# format the data frames
+
+# function: for a given connectivity scenario, put in the data frame with the stable eq and the data frame with the unstable eq, return a list where the first element is the dataframe with all the non-zero equilibria with their stability labeled and the second element is the dataframe with all the zero equilibria with stability labeled
+bifurplotdt.fun <- function(stabdt, unstabdt){
+  stabdt.1 <- stabdt %>% mutate(stability = "stable") %>% filter(Astar !=0)
+  stabdt.0 <- stabdt %>% mutate(stability = "stable") %>% filter(Astar ==0)
+  unstabdt.1 <- unstabdt %>% mutate(stability = "unstable") %>% filter(Astar!=0)
+  unstabdt.0 <- unstabdt %>% mutate(stability = "unstable") %>% filter(Astar==0)
+  nonzerodt <- rbind(stabdt.1, unstabdt.1) %>% arrange(Astar)
+  zerodt <- rbind(stabdt.0, unstabdt.0) %>% arrange(Astar)
+
+return(list(nonzerodt, zerodt))
+  
+}
+
+# make the data frames
+noc <- bifurplotdt.fun(noConnStab,noConnUnstab)
+
+sLc <- bifurplotdt.fun(sLConnStab,sLConnUnstab)
+sHc <- bifurplotdt.fun(sHConnStab,sHConnUnstab)
+
+dLc <- bifurplotdt.fun(dLConnStab,dLConnUnstab)
+dHc <- bifurplotdt.fun(dHConnStab,dHConnUnstab)
+
+sdLc <- bifurplotdt.fun(sdLConnStab,sdLConnUnstab)
+#sdHc <- bifurplotdt.fun(sdHConnStab,sdHConnUnstab) # high drift plus spore case only has stable equilibria
+
+
+
+```
+
+## plot Fig 2
+
+```{r}
+# colors
+high.col <- "red"
+low.col <- "blue"
+mid.col <- "#33BEFF"
+
+```
+
+```{r}
+# arrange the panels in a row 
+
+# for drift only case, adjust the 0 eq a little bit so it is easier to see the stability
+noc.vjust <- -0.0025
+highc.vjust <- 0.001
+
+# check layout
+#layout(matrix(c(1, 2, 3), nrow = 1, ncol = 3), widths = rep.int(1, 3), heights = rep.int(1, 1))#widths and heights: give values relative to each other, here just 1 so should be 1:1, repeat same width for ncols and same height for nrows
+#layout.show(3)# show all 3 plots
+
+pdf("Fig2bifur.pdf", height = 7/2.5)# default height and width are both 7
+par(mfrow = c(1, 3), oma = c(3.5, 4, 2, 1))
+layout(matrix(c(1, 2, 3), nrow = 1, ncol = 3), widths = rep.int(1, 3), heights = rep.int(1, 1))
+par(mar=c(0, 0, 0, 0.5))
+# spore only
+plot(x =noc[[1]]$urchins, y = noc[[1]]$Astar, type = "l", xlim = c(0,100),ylim = c(0,0.9), lty = 2, xlab = NA, ylab = NA, las = 1, col = low.col)# plot everything with lty = 2
+#mtext("Equilibrium kelp density", side=2, cex=1, line = 2.5)
+mtext(expression("Equilibrium kelp density (ind./m"^2*")"), side=2, cex=0.95, line = 2.4)
+mtext("a) Spores only", side = 3, cex = 1, adj=0)
+# add the upper stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the lower stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the unstable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="stable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="stable")], type = "l", lty = 1, col = low.col)
+# add the stable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="unstable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="unstable")], type = "l", lty = 2, col = low.col)
+# LOW SPORE CONN 
+lines(x =sLc[[1]]$urchins, y = sLc[[1]]$Astar, type = "l", lty = 2, col = mid.col)
+# add the upper stable section
+lines(x =sLc[[1]]$urchins[which(sLc[[1]]$Astar>max(sLc[[1]]$Astar[which(sLc[[1]]$stability=="unstable")]))], y = sLc[[1]]$Astar[which(sLc[[1]]$Astar>max(sLc[[1]]$Astar[which(sLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the lower stable section
+lines(x =sLc[[1]]$urchins[which(sLc[[1]]$Astar<min(sLc[[1]]$Astar[which(sLc[[1]]$stability=="unstable")]))], y = sLc[[1]]$Astar[which(sLc[[1]]$Astar<min(sLc[[1]]$Astar[which(sLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the unstable 0 eq
+lines(sLc[[2]]$urchins[which(sLc[[2]]$stability=="stable")], y = sLc[[2]]$Astar[which(sLc[[2]]$stability=="stable")], type = "l", lty = 1, col = mid.col)
+# add the stable 0 eq
+lines(sLc[[2]]$urchins[which(sLc[[2]]$stability=="unstable")], y = sLc[[2]]$Astar[which(sLc[[2]]$stability=="unstable")], type = "l", lty = 2, col = mid.col)
+# HIGH SPORE CONN
+lines(x =sHc[[1]]$urchins, y = sHc[[1]]$Astar, type = "l", lty = 2, col = high.col)
+# add the upper stable section
+lines(x =sHc[[1]]$urchins[which(sHc[[1]]$Astar>max(sHc[[1]]$Astar[which(sHc[[1]]$stability=="unstable")]))], y = sHc[[1]]$Astar[which(sHc[[1]]$Astar>max(sHc[[1]]$Astar[which(sHc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = high.col)
+# add the lower stable section
+lines(x =sHc[[1]]$urchins[which(sHc[[1]]$Astar<min(sHc[[1]]$Astar[which(sHc[[1]]$stability=="unstable")]))], y = sHc[[1]]$Astar[which(sHc[[1]]$Astar<min(sHc[[1]]$Astar[which(sHc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = high.col)
+# add the unstable 0 eq
+lines(sHc[[2]]$urchins[which(sHc[[2]]$stability=="stable")], y = sHc[[2]]$Astar[which(sHc[[2]]$stability=="stable")], type = "l", lty = 1, col = high.col)
+# add the stable 0 eq
+lines(sHc[[2]]$urchins[which(sHc[[2]]$stability=="unstable")], y = sHc[[2]]$Astar[which(sHc[[2]]$stability=="unstable")], type = "l", lty = 2, col = high.col)
+# add connectivity level
+legend(x = "topright", legend = c("0", "0.2", "1"), col = c(low.col, mid.col, high.col), lwd = 1, title = "External input (relative)", bty= "n", cex = 1.1)
+legend(x = 35, y = 0.5, legend = c("stable", "unstable"), lty = c(1, 2), col = c("black", "black"), lwd = 1, title = "Stability", bty= "n", cex = 1.1)
+# drift only
+plot(x =noc[[1]]$urchins, y = noc[[1]]$Astar, type = "l", xlim = c(0,100),ylim = c(noc.vjust,0.9), lty = 2, xlab = NA, ylab = NA, col = low.col, yaxt = "n")# plot everything with lty = 2
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8), labels = NA)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+mtext(expression("Urchin density (ind./m"^2*")"), side=1, cex=0.95, line = 2.5, outer=TRUE)#outer=TRUE, adj=0.5,
+mtext("b) Drift only", side = 3, cex = 1, adj = 0)
+# add the upper stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the lower stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the unstable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="stable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="stable")]+noc.vjust, type = "l", lty = 1, col = low.col)
+# add the stable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="unstable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="unstable")]+noc.vjust, type = "l", lty = 2, col = low.col)
+# LOW DRIFT CONN 
+lines(x =dLc[[1]]$urchins, y = dLc[[1]]$Astar, type = "l", lty = 2, col = mid.col)
+# add the upper stable section
+lines(x =dLc[[1]]$urchins[which(dLc[[1]]$Astar>max(dLc[[1]]$Astar[which(dLc[[1]]$stability=="unstable")]))], y = dLc[[1]]$Astar[which(dLc[[1]]$Astar>max(dLc[[1]]$Astar[which(dLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the lower stable section
+lines(x =dLc[[1]]$urchins[which(dLc[[1]]$Astar<min(dLc[[1]]$Astar[which(dLc[[1]]$stability=="unstable")]))], y = dLc[[1]]$Astar[which(dLc[[1]]$Astar<min(dLc[[1]]$Astar[which(dLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the unstable 0 eq
+lines(dLc[[2]]$urchins[which(dLc[[2]]$stability=="stable")], y = dLc[[2]]$Astar[which(dLc[[2]]$stability=="stable")], type = "l", lty = 1, col = mid.col)
+# add the stable 0 eq
+lines(dLc[[2]]$urchins[which(dLc[[2]]$stability=="unstable")], y = dLc[[2]]$Astar[which(dLc[[2]]$stability=="unstable")], type = "l", lty = 2, col = mid.col)
+# HIGH DRIFT CONN: all nonzero eq are stable
+lines(x =dHc[[1]]$urchins, y = dHc[[1]]$Astar, type = "l", lty = 1, col = high.col)
+#lines(x =dHc[[1]]$urchins, y = dHc[[1]]$Astar, type = "l", lty = 2, col = high.col)
+# add the upper stable section
+#lines(x =dHc[[1]]$urchins[which(dHc[[1]]$Astar>max(dHc[[1]]$Astar[which(dHc[[1]]$stability=="unstable")]))], y = dHc[[1]]$Astar[which(dHc[[1]]$Astar>max(dHc[[1]]$Astar[which(dHc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = high.col)
+# add the lower stable section
+#lines(x =dHc[[1]]$urchins[which(dHc[[1]]$Astar<min(dHc[[1]]$Astar[which(dHc[[1]]$stability=="unstable")]))], y = dHc[[1]]$Astar[which(dHc[[1]]$Astar<min(dHc[[1]]$Astar[which(dHc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = high.col)
+# add the unstable 0 eq
+lines(dHc[[2]]$urchins[which(dHc[[2]]$stability=="stable")], y = dHc[[2]]$Astar[which(dHc[[2]]$stability=="stable")]+highc.vjust, type = "l", lty = 1, col = high.col)
+# add the stable 0 eq
+lines(dHc[[2]]$urchins[which(dHc[[2]]$stability=="unstable")], y = dHc[[2]]$Astar[which(dHc[[2]]$stability=="unstable")], type = "l", lty = 2, col = high.col)
+# spores and drift
+plot(x =noc[[1]]$urchins, y = noc[[1]]$Astar, type = "l", xlim = c(0,100),ylim = c(0,0.9), lty = 2, xlab = "Urchin density", ylab = "Equilibrium kelp density", col = low.col, yaxt = "n")# plot everything with lty = 2
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8), labels = NA)
+mtext("c) Spores and drift", side = 3, cex = 1, adj = 0)
+# add the upper stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar>max(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the lower stable section
+lines(x =noc[[1]]$urchins[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], y = noc[[1]]$Astar[which(noc[[1]]$Astar<min(noc[[1]]$Astar[which(noc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = low.col)
+# add the unstable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="stable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="stable")], type = "l", lty = 1, col = low.col)
+# add the stable 0 eq
+lines(noc[[2]]$urchins[which(noc[[2]]$stability=="unstable")], y = noc[[2]]$Astar[which(noc[[2]]$stability=="unstable")], type = "l", lty = 2, col = low.col)
+# LOW SPORE AND DRIFT CONN 
+lines(x =sdLc[[1]]$urchins, y = sdLc[[1]]$Astar, type = "l", lty = 2, col = mid.col)
+# add the upper stable section
+lines(x =sdLc[[1]]$urchins[which(sdLc[[1]]$Astar>max(sdLc[[1]]$Astar[which(sdLc[[1]]$stability=="unstable")]))], y = sdLc[[1]]$Astar[which(sdLc[[1]]$Astar>max(sdLc[[1]]$Astar[which(sdLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the lower stable section
+lines(x =sdLc[[1]]$urchins[which(sdLc[[1]]$Astar<min(sdLc[[1]]$Astar[which(sdLc[[1]]$stability=="unstable")]))], y = sdLc[[1]]$Astar[which(sdLc[[1]]$Astar<min(sdLc[[1]]$Astar[which(sdLc[[1]]$stability=="unstable")]))], type = "l", lwd = 1.1, col = mid.col)
+# add the unstable 0 eq
+lines(sdLc[[2]]$urchins[which(sdLc[[2]]$stability=="stable")], y = sdLc[[2]]$Astar[which(sdLc[[2]]$stability=="stable")], type = "l", lty = 1, col = mid.col)
+# add the stable 0 eq
+lines(sdLc[[2]]$urchins[which(sdLc[[2]]$stability=="unstable")], y = sdLc[[2]]$Astar[which(sdLc[[2]]$stability=="unstable")], type = "l", lty = 2, col = mid.col)
+# HIGH DRIFT CONN: all nonzero eq are stable
+lines(x =sdHConnStab$urchins, y = sdHConnStab$Astar, type = "l", lty = 1, col = high.col)
+
+dev.off()
+
+```
+
+
+# Figure 3
+
+
+## get equilibria
+
+First get the high equilibrium values to use as initial conditions (highest possible equilibria, so fully connected patches with no urchins in either patch)
+
+```{r}
+#parameters
+params.02 = c(cs1 = 1, cs2 = 1, cd1 = 1, cd2 = 1, exts1, exts2, extd1, extd2, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = 0, u2=0)
+
+# initial conditions
+xic.02 <- c(G1 = 5, J1= 5, A1= 1, G2 = 5, J2= 5, A2= 1)
+
+#time
+times.02 = seq(from = 0, to = 3000, length.out = 3000)
+
+#run the model
+results.02 <- ode(xic.02, times.02, mod.fun2, params.02, method = "lsodes")#switched to lsodes from lsoda because the system was stiff (for high urchins, the end of the simulation was NA)
+colnames(results.02) = c("time", "G1", "J1", "A1", "G2", "J2", "A2")
+
+
+# check the system equilibrates
+#plot(x = results.02[ ,"time"], y = results.02[ ,"A1"], type = 'l', las = 1, lwd = 2, xlab = 'Time', ylab = 'adults/m2', ylim = c(0, 1))
+#plot(x = results.02[ ,"time"], y = results.02[ ,"A2"], type = 'l', las = 1, lwd = 2, xlab = 'Time', ylab = 'adults/m2', ylim = c(0, 1))
+
+# store the equilibrium values
+Aheq <- unname(results.02[length(times.02) ,"A1"])# unname this because otherwise it is names "A" which causes issues when assigning it as an initial condition - end up with an A.A
+Jheq <- unname(results.02[length(times.02) ,"J1"])
+Gheq <- unname(results.02[length(times.02) ,"G1"])
+
+```
+
+## metapars
+
+define "metaparameters" that remain the same in all simulations
+```{r}
+# high vs low state threshold
+Athresh <- 0.1 # note this is higher than the threshold used in the GLMM and ODE validation simulations (which was 0.05) because 0.1 matches up better with the bifurcation diagrams (a lower threshold value causes some values that are in the lower of the two equilibria shown in Fig. 2 to be classified as high kelp). This higher threshold also makes sense here because unlike in the empirical data, there are fewer factors that could cause kelp to have low densities
+
+# high and low initial conditions
+# high values: equilibrium values of fully connected patches with no urchins (highest possible, calculated above)
+G0.h <- Gheq
+J0.h <- Jheq
+A0.h <- Aheq
+
+# low values: no juvenile or adult sporophytes, negligible amount of gametophytes
+G0.l <- 0.0001
+J0.l <- 0
+A0.l <- 0
+
+# sets of initial conditions
+G0.set <- c(G0.l, G0.h)
+J0.set <- c(J0.l, J0.h)
+A0.set <- c(A0.l, A0.h)
+
+
+# set of connectivity values: range from 0 (no connectivity between the patches) to 1 (the patches are fully connected)
+cset1 <- seq(from = 0, to =1, length.out = 50)
+
+# timesteps: vector of time steps for the simulations
+times1 <- seq(from = 0, to = 2000, length.out = 2000)
+
+# assign the initial upper urchin density to use in the binary search algorithm (should be high enough that only the low state is stable in the highest connectivity scenario, when cs = cd =1)
+U.up0 <- 40
+
+```
+
+## functions
+
+define the functions used to run the Fig. 3 simulations
+
+### ucrit function
+
+For each level of connectivity, find the lower and upper urchin densities (the boundaries for which the system is bistable), repeat with spore connectivity only, drift connectivity only, and both; do this for local disturbance (only patch 1 is disturbed) and regional disturbance (both patches are disturbed)
+
+```{r}
+
+# function with local disturbances
+# function of indicators Is and Id multiplying the spore and drift connectivity values (to turn either spores or drift on or off) and indicators I10 and I20 deciding whether the initial conditions in patch 1 are high or low (for finding upper and lower boundary) and whether the initial conditions in patch 2 are high (local disturbance case) or low (for finding lower boundary in regional disturbance case). Is and Id are either 0 or 1, and I10 and I20 are either 1 or 2 (corresponding to elements of G0.set, J0.set, and A0.set). Eg, if Is = 1, Id =0, I10 = 1 and I20 =2, then exts = cset1[i], estd = 0 (0*cset1[i]), patch 1 initial conditions are all low (G0.set[1], J0.set[1], A0.set[1]]), and patch 2 initial conditions are all high (G0.set[2], J0.set[2], A0.set[2]])
+ucritfun1 <- function(Is, Id, I10, I20){
+  
+  ucrit.set.f <- NaN*cset1
+  
+for(i in 1:length(cset1)){
+  
+# assign the initial upper value
+upper <- U.up0
+
+if(i==1){
+ lower <- 0 #if this is the first run (no connectivity), the initial lower urchin value is 0 
+} else{
+  lower <- ucrit.set.f[i-1]#otherwise, the initial lower value is the ucrit from the previous run, since as connectivity increases, the threshold should either be greater than or equal to the threshold as lower conn values
+}
+
+while(upper-lower > 1*10^-5){#while the difference between the upper and lower bounds is greater than 10^-5
+  
+  mid = (upper + lower)/2#calculate the mid point
+  
+  # assign the urchin density
+	u.while <- mid
+	
+	#simulate the model
+	# get the parameters: here, spore connectivity only
+	params.while = c(cs1 = cset1[i]*Is, cs2 = cset1[i]*Is, cd1=cset1[i]*Id, cd2=cset1[i]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = u.while, u2=u.while)
+	 
+	# high initial conditions: both patches are high
+	xic.while <- c(G1 = G0.set[I10], J1= J0.set[I10], A1= A0.set[I10], G2 = G0.set[I20], J2= J0.set[I20], A2= A0.set[I20])
+	
+	#simulate the model (TWO PATCH model here)
+	results.while <- ode(xic.while, times1, mod.fun2, params.while, method = "lsodes")
+  #colnames(results.while) = c("time", "G1", "J1", "A1", "G2", "J2", "A2")
+	
+#get the final value of A
+	Astar <- results.while[length(times1), 4]# A1 values are 4th column
+
+  
+  if(Astar > Athresh){#if A* for u=mid is greater than threshold (in high state)
+    lower <- mid #the mid point is too low (since A decreases w/ increasing u), so mid is the new lower bound
+  } else if (Astar < Athresh) {#if A* for u=mid is less than the threshold
+    upper <- mid# the mid point is too high, so mid is the new upper bound
+  } else {
+    upper <- lower#if A*=threshold, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+  
+  #print(mid)
+}
+
+# the mid point at which the while loop ends is the ucrit value for the ith conn value
+ucrit.set.f[i] <- mid
+  
+}
+  
+  return(ucrit.set.f)
+
+}
+
+```
+
+
+### Acrit functions
+
+in region of bistability, make function that returns the Acrit values for each combination of connectivity and urchin densities
+
+```{r}
+
+# local disturbance
+
+# function of the connectivity indicators (whether there is connectivity of spores, drift, or both) and the critical upper and lower urchin densities calculated using the above function
+Acritlocfun <- function(Is, Id, loc.up.f, loc.low.f){
+#holding matrix for A1crit vals (rows are connectivity values, columns are u values)
+loc.Acrit.f <- matrix(NaN, nrow = length(cset1), ncol = length(uset1))
+
+#holding matrix for the values of A1 and A2 for when patch 1 starts in low state
+loc.A1.f <- matrix(NaN, nrow = length(cset1), ncol = length(uset1))
+loc.A2.f <- matrix(NaN, nrow = length(cset1), ncol = length(uset1))
+
+for(i in 1:length(cset1)){#for each conn value
+  #get the boundaries of the region of bistability at this connectivity value
+  umax <- loc.up.f[i]#upper threshold
+  umin <- loc.low.f[i]# lower threshold
+  
+  for(j in 1:length(uset1)){# for each urchin value
+
+    if(uset1[j]>umin & uset1[j]<umax){#if the jth urchin dens is within the bistability region
+      
+      # calculate Acrit
+      # assign the initial upper and lower A0 values
+	upper <- A0.h
+	
+	if(j==1){
+ lower <- 0 #if this is the first urchin dens, the initial lower A1 value is 0 
+} else if (is.na(loc.Acrit.f[i, j-1])==T){ #if the last run was NA (not in ucrit range)
+  lower <- 0
+} else{
+  lower <- loc.Acrit.f[i, j-1]#otherwise, the initial lower value is the Acrit from the previous run, since as urchin dens increases, the threshold should either be greater than or equal to the threshold as lower urchin values
+}
+
+	
+	while(upper-lower > 1*10^-4){#while the difference between the upper and lower bounds is greater than 10^-4 (NOTE made this less precise than the ucrit runs b/c not plotting curves and want to speed it up)
+	  
+	  mid = (upper + lower)/2#calculate the mid point
+	  
+	  fractA0.h <- mid/A0.h#calculate the fraction of the high eq that A0=mid is
+	  
+	  #assume G0 and J0 are disturbed 50% less than adults
+	  #could also do max(1, 2*fractA0.h)*G0.h
+	  G0.mid <- ifelse(2*fractA0.h<1, 2*fractA0.h*G0.h, G0.h)
+	  J0.mid <- ifelse(2*fractA0.h<1, 2*fractA0.h*J0.h, J0.h)
+	  
+	  #simulate the model with A0=mid (and this is the local case, so A2 stays high)
+	  #parameters
+	  params.i = c(cs1 = cset1[i]*Is, cs2 = cset1[i]*Is, cd1=cset1[i]*Id, cd2=cset1[i]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = uset1[j], u2=uset1[j])
+
+#initial conditions: A starts at mid
+	 ic.i <- c(G1 = G0.mid, J1= J0.mid, A1= mid, G2 = G0.h, J2= J0.h, A2= A0.h)#initial conditions
+	  
+#simulate the model
+  results.i <- ode(ic.i, times1, mod.fun2, params.i, method = "lsodes")
+  
+  #get the final value of A1
+	Astar <- results.i[length(times1), 4]# A1 values are 4th column
+	
+	if(Astar > Athresh){#if A* for Acrit=mid is greater than threshold (in high state)
+    upper <- mid #the mid point is too high, so mid is the new upper bound
+  } else if (Astar < Athresh) {#if A* for Acrit=mid is less than the threshold (in low state)
+    lower <- mid# the mid point is too low (need a higher A0), so mid is the new lower bound
+  } else {
+    upper <- lower#if A*=threshold, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+	  
+	}
+
+#the output of the while loop is the A10 threshold recovery  
+     loc.Acrit.f[i, j] <- mid
+     
+     # now run the model with patch 1 starting at low initial conditions (so it goes to the low state) and record whether patch 2 stays high or goes low 
+     ic.i2 <- c(G1 = G0.l, J1= J0.l, A1= J0.l, G2 = G0.h, J2= J0.h, A2= A0.h)
+     
+     #simulate the model
+     results.i2 <- ode(ic.i2, times1, mod.fun2, params.i, method = "lsodes")
+     
+     loc.A1.f[i, j] <- results.i2[length(times1), 4]
+     loc.A2.f[i, j] <- results.i2[length(times1), 7]#A2 is 7th column
+     
+      
+    } else{# if the jth urchin density is outside the bistability region, Acrit = NA
+      
+      loc.Acrit.f[i, j] <- NA
+      loc.A1.f[i, j] <- NA
+      loc.A2.f[i, j] <- NA
+      
+    }
+    
+    
+  }
+  
+}
+
+return(list(loc.Acrit.f, loc.A1.f, loc.A2.f))
+
+}
+
+
+# regional disturbance
+Acritregfun <-function(Is, Id, reg.up.f, reg.low.f){
+#holding matrix for A1crit vals (rows are connectivity values, columns are u values)
+reg.Acrit.f <- matrix(NaN, nrow = length(cset1), ncol = length(uset1))
+
+#holding matrix for the values of A1 and A2 for A10 < A1crit: don't need that here because the patches are identical so it shouldn't be possible to have heterogeneity
+
+for(i in 1:length(cset1)){#for each conn value
+  #get the boundaries of the region of bistability at this connectivity value
+  umax <- reg.up.f[i]#upper threshold
+  umin <- reg.low.f[i]# lower threshold
+  
+  for(j in 1:length(uset1)){# for each urchin value
+
+    if(uset1[j]>umin & uset1[j]<umax){#if the jth urchin dens is within the bistability region
+      
+      # calculate Acrit
+      # assign the initial upper and lower A0 values
+	upper <- A0.h
+	
+	if(j==1){
+ lower <- 0 #if this is the first urchin dens, the initial lower A1 value is 0 
+} else if (is.na(reg.Acrit.f[i, j-1])==T){ #if the last run was NA (not in ucrit range)
+  lower <- 0
+} else{
+  lower <- reg.Acrit.f[i, j-1]#otherwise, the initial lower value is the Acrit from the previous run, since as urchin dens increases, the threshold should either be greater than or equal to the threshold at lower urchin values
+}
+
+	
+	while(upper-lower > 1*10^-4){#while the difference between the upper and lower bounds is greater than 10^-4 (NOTE made this less precise than the ucrit runs b/c not plotting curves and want to speed it up)
+	  
+	  mid = (upper + lower)/2#calculate the mid point
+	  
+	  fractA0.h <- mid/A0.h#calculate the fraction of the high eq that A0=mid is
+	  
+	  #assume G0 and J0 are disturbed 50% less than adults
+	  #could also do max(1, 2*fractA0.h*G0.h)
+	  G0.mid <- ifelse(2*fractA0.h<1, 2*fractA0.h*G0.h, G0.h)
+	  J0.mid <- ifelse(2*fractA0.h<1, 2*fractA0.h*J0.h, J0.h)
+	  
+	  #simulate the model with A0=mid (regional case so same initial conditions in both)
+	  #parameters
+	  params.i = c(cs1 = cset1[i]*Is, cs2 = cset1[i]*Is, cd1=cset1[i]*Id, cd2=cset1[i]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = uset1[j], u2=uset1[j])
+
+#initial conditions: A starts at mid
+	 ic.i <- c(G1 = G0.mid, J1= J0.mid, A1= mid, G2 = G0.mid, J2= J0.mid, A2= mid)#initial conditions
+	  
+#simulate the model
+  results.i <- ode(ic.i, times1, mod.fun2, params.i, method = "lsodes")
+  
+  #get the final value of A1
+	Astar <- results.i[length(times1), 4]# A1 values are 4th column
+	
+	if(Astar > Athresh){#if A* for Acrit=mid is greater than threshold (in high state)
+    upper <- mid #the mid point is too high, so mid is the new upper bound
+  } else if (Astar < Athresh) {#if A* for Acrit=mid is less than the threshold (in low state)
+    lower <- mid# the mid point is too low (need a higher A0), so mid is the new lower bound
+  } else {
+    upper <- lower#if A*=threshold, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+	  
+	}
+
+#the output of the while loop is the A10 threshold recovery  
+     reg.Acrit.f[i, j] <- mid
+     
+    } else{# if the jth urchin density is outside the bistability region, Acrit = NA
+      
+      reg.Acrit.f[i, j] <- NA
+     
+    }
+    
+    
+  }
+  
+}
+
+return(reg.Acrit.f)
+
+}
+
+
+```
+
+
+## ucrit sims
+
+compute the critical urchin densities denoting the region of bistability (black lines in Fig. 3) for each level of patch connectivity and connectivity scenario 
+
+Note this takes about 10 min
+```{r}
+
+#ucritfun1 <- function(Is, Id, I10, I20) -> Is = 1 or 0 means with or without spore connectivity, same for drift, I10 = 1 or 2 means low or high initial conditions in patch 1, same for patch 2
+
+tic()
+# upper threshold (both patches start high)
+## local
+loc.up.s <- ucritfun1(1, 0, 2, 2) # spores only
+loc.up.d <- ucritfun1(0, 1, 2, 2) # drift only
+loc.up.sd <- ucritfun1(1, 1, 2, 2) # both
+
+## regional: don't need to redo the upper threshold for regional case since it is the same as local case (second patch starts high in both cases)
+reg.up.s <- loc.up.s
+reg.up.d <- loc.up.d
+reg.up.sd <- loc.up.sd
+
+# lower threshold
+## local disturbance (patch 1 is low, patch 2 is high)
+loc.low.s <- ucritfun1(1, 0, 1, 2) # spores only
+loc.low.d <- ucritfun1(0, 1, 1, 2) # drift only
+loc.low.sd <- ucritfun1(1, 1, 1, 2) # both
+
+## regional disturbance (both patches are low)
+reg.low.s <- ucritfun1(1, 0, 1, 1) # spores only
+reg.low.d <- ucritfun1(0, 1, 1, 1) # drift only
+reg.low.sd <- ucritfun1(1, 1, 1, 1) # both
+toc() #639.913 sec elapsed
+
+
+```
+
+## Acrit sims
+
+Within the region of bistability calculated above, compute the threshold initial kelp density for which the system goes to the high kelp state (green shading in Fig. 3)
+
+First decide on the range of urchin densities to test:
+```{r}
+# NOTE: this timesteps should have same length as for the threshold simulations
+#times1 <- seq(from = 0, to = 2000, length.out = 2000)#vector of time steps
+
+max(loc.up.sd)#29.8 = max upper critical urchin threshold
+min(reg.low.s)#3.6 = min lower critical urchin threshold
+
+
+#uset1 <- seq(from = 2, to =40, length.out =80)
+
+uset1 <- seq(from = 2, to =30, length.out =50)
+
+min(loc.up.sd-loc.low.sd)# narrowest region of bistablity = 0.87
+(uset1[2]-uset1[1])# make sure urchin interval is less than the narrowest region of bistability
+
+```
+
+Run the simulations (note this takes about and hour and a half to run)
+```{r}
+
+# local (takes about half an hour)
+# Acritlocfun <- function(Is, Id, loc.up.f, loc.low.f), returns list
+tic()
+## spores
+locsims.s <- Acritlocfun(1, 0, loc.up.s, loc.low.s)
+loc.Acrit.s <- locsims.s[[1]] # Acrit values
+loc.A1.s <- locsims.s[[2]] # final A1 values when patch 1 starts low
+loc.A2.s <- locsims.s[[3]] # final A2 values when patch 1 starts low
+## drift
+locsims.d <- Acritlocfun(0, 1, loc.up.d, loc.low.d)
+loc.Acrit.d <- locsims.d[[1]] 
+loc.A1.d <- locsims.d[[2]] 
+loc.A2.d <- locsims.d[[3]]
+## spores and drift
+locsims.sd <- Acritlocfun(1, 1, loc.up.sd, loc.low.sd)
+loc.Acrit.sd <- locsims.sd[[1]] 
+loc.A1.sd <- locsims.sd[[2]] 
+loc.A2.sd <- locsims.sd[[3]]
+toc() #1513.649 sec elapsed
+
+tic()
+# regional (takes a little over an hour)
+reg.Acrit.s <- Acritregfun(1, 0, reg.up.s, reg.low.s)
+reg.Acrit.d <- Acritregfun(0, 1, reg.up.d, reg.low.d)
+reg.Acrit.sd <- Acritregfun(1, 1, reg.up.sd, reg.low.sd)
+toc() #4018.47 sec elapsed
+
+```
+
+
+## plotting
+
+Make Figure 3
+
+### functions
+
+```{r}
+# make functions to make the heatmap, polygon and border lines for each of the 6 panels
+# note to instead use facet wrap, would need to make a single data frame for each of the plot components (heatmap, polygon, border)
+
+#View(loc.A2.sd.low)
+
+# heatmapdf.fun: turn the results into a dataframe to turn into a heatmap
+heatmapdf.fun <- function(datam, cvals, uvals, A2lowdf){#datam=results of simulation for all combinations of cvals and uvals (needs to be a matrix), cvals = connectivity values used in simulations, uvals = urchin densities used in simulations, A2lowdf = data frame with the c,u values for which patch 2 went low (local simulations only)
+
+#make the df of parameter combinations
+cugrid <- expand.grid(cvals, uvals)
+
+if(is.na(A2lowdf)==T){#for the regional cases (no A2low data)
+  #make the data frame
+heatmap.df <- cbind(cugrid, c(datam))
+colnames(heatmap.df) <- c("conn", "urchins", "Acrit")
+
+} else{#for the local cases (have A2data)
+  heatmap.df <- cbind(cugrid, c(datam))
+colnames(heatmap.df) <- c("conn", "urchins", "Acrit")
+
+heatmap.df$A2low <- NaN*heatmap.df$conn
+
+for(i in 1:length(heatmap.df$conn)){
+  if(i %in% A2lowdf$index){#if the ith c,u combination is in A2lowdf
+    heatmap.df$A2low[i] <- "T" # patch 2 went low when patch 1 was low
+  } else if(is.na(heatmap.df$Acrit[i])==T){# if the ith combination is not in A2lowdf and Acrit = NA (so the ith combination in not in the region of bistability)
+    
+    heatmap.df$A2low[i] <- NA 
+    
+  } else{ # if the ith combination is not in A2lowdf and it is in the region of bistability
+    
+    heatmap.df$A2low[i] <- "F" # patch 2 stayed high when patch 1 was low
+  }
+}
+
+}
+
+return(heatmap.df)
+  
+}
+
+
+# polygon function: make single polygon with hole in it
+# polyval= the value assigned to the polygon, pos.adj = extend the polygon so it goes out further than the heatmap (otherwise the ends of the hm stick out), hole.adj = make the hole a little smaller than the actual bistable region so the heatmap isn't jagged, low and upthreshvals = the critical urchin densities from the simulations (outline the region of bistability)
+polydf.fun <- function(cvals, uvals, polyval, pos.adj, hole.adj, lowthreshvals, upthreshvals){
+  
+  ids <- factor(c("1"))#only have 1 polygon
+  
+  values <- data.frame(id = ids, value = c(polyval))
+  
+  positions <- data.frame(id = rep(ids, 5), conn = c(0-pos.adj, max(cvals)+pos.adj, max(cvals)+pos.adj, 0-pos.adj, 0-pos.adj),urchins = c(0-pos.adj, 0-pos.adj, max(uvals)+pos.adj, max(uvals)+pos.adj, 0-pos.adj))
+  
+  datapoly <- merge(values, positions, by = c("id"))
+  datapoly$subid <- rep(1, length(datapoly$id))
+  
+  # now need to add a hole
+# Use the subgroup aesthetic to differentiate holes from the main polygon. So for each id (polygon), have all the rows for the main polygon, and the subid column is 1. Then the next set of rows has subid=2 and same main id and has all the rows for the holes
+  hole.df<- data.frame(id = rep(ids, 2*length(cvals)), value = rep(0, 2*length(cvals)), conn = c(cvals, rev(cvals)), urchins = c(lowthreshvals+hole.adj, rev(upthreshvals)-hole.adj))
+  
+  hole.df$subid <- rep(2, length(hole.df$id))
+  
+  datapoly2 <- rbind(datapoly, hole.df)
+  
+  return(datapoly2)
+  
+}
+
+#polydf.fun(cset1, uset1, 0, 0.01, 0.5, loc.low.s, loc.up.s)
+
+
+#function to turn the ucrit values into data frames to plot as black lines in Fig. 3
+borderlines.fun <- function(cvals, lowthreshvals, upthreshvals, line.adj){
+  borderdf <- data.frame(conn1 = cvals, threshl = lowthreshvals+line.adj, threshu = upthreshvals-line.adj)
+  
+  return(borderdf)
+}
+
+
+```
+
+### format results
+
+```{r}
+# for the local disturbance cases, get the connectivity and urchin values for which patch1 "drags down" patch 2 following a local disturbance (cases where patch 1 goes to the low state and then patch 2 also goes to the low state even though it wasn't disturbed)
+# spores only
+loc.A2.s.low <- expand.grid(cset1, uset1)
+loc.A2.s.low$index <- seq(from = 1, to = length(loc.A2.s.low[ ,1]), by =1)#add an index for subsetting rows out (identifies the u and c parameter combinations)
+loc.A2.s.low <- loc.A2.s.low[which(loc.A2.s<Athresh),]# select the connectivity and urchin combinations where patch 2 went to the low state (here which() turns the loc.A2.s matrix into a vector, so the ith index correspond to the urchin, connectivity combintions in the ith row of loc.A2.s.low)
+
+# drift only
+loc.A2.d.low <- expand.grid(cset1, uset1)
+loc.A2.d.low$index <- seq(from = 1, to = length(loc.A2.d.low[ ,1]), by =1)#add an index for subsetting these rows out later
+loc.A2.d.low <- loc.A2.d.low[which(loc.A2.d<Athresh),]
+
+# spores and drift
+loc.A2.sd.low <- expand.grid(cset1, uset1)
+loc.A2.sd.low$index <- seq(from = 1, to = length(loc.A2.sd.low[ ,1]), by =1)#add an index for subsetting these rows out later
+loc.A2.sd.low <- loc.A2.sd.low[which(loc.A2.sd<Athresh),]
+
+#loc.A2.d.low
+
+#View(loc.Acrit.d.df)
+
+# get the data frames for the plots
+#local
+# spores only
+loc.Acrit.s.df <- heatmapdf.fun(loc.Acrit.s, cset1, uset1, loc.A2.s.low)# note this gives warning "the condition has length > 1 and only the first element will be used" b/c function is computing is.na(loc.A2.s.low), and since this is a whole data frame it is only using the first element. 
+loc.Acrit.s.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.5, loc.low.s, loc.up.s)
+loc.Acrit.s.border <- borderlines.fun(cset1, loc.low.s, loc.up.s, 0.5)
+#drift only
+loc.Acrit.d.df <- heatmapdf.fun(loc.Acrit.d, cset1, uset1, loc.A2.d.low)
+loc.Acrit.d.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.5, loc.low.d, loc.up.d)
+loc.Acrit.d.border <- borderlines.fun(cset1, loc.low.d, loc.up.d, 0.5)
+#both
+loc.Acrit.sd.df <- heatmapdf.fun(loc.Acrit.sd, cset1, uset1, loc.A2.sd.low)
+loc.Acrit.sd.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.35, loc.low.sd, loc.up.sd)
+loc.Acrit.sd.border <- borderlines.fun(cset1, loc.low.sd, loc.up.sd, 0.35)
+
+#regional
+reg.Acrit.s.df <- heatmapdf.fun(reg.Acrit.s, cset1, uset1, NA)
+reg.Acrit.s.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.5, reg.low.s, reg.up.s)
+reg.Acrit.s.border <- borderlines.fun(cset1, reg.low.s, reg.up.s, 0.5)
+#drift only
+reg.Acrit.d.df <- heatmapdf.fun(reg.Acrit.d, cset1, uset1, NA)
+reg.Acrit.d.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.5, reg.low.d, reg.up.d)
+reg.Acrit.d.border <- borderlines.fun(cset1, reg.low.d, reg.up.d, 0.5)
+#both
+reg.Acrit.sd.df <- heatmapdf.fun(reg.Acrit.sd, cset1, uset1, NA)
+reg.Acrit.sd.pol <- polydf.fun(cset1, uset1, 0, 0.01, 0.5, reg.low.sd, reg.up.sd)
+reg.Acrit.sd.border <- borderlines.fun(cset1, reg.low.sd, reg.up.sd, 0.5)
+
+```
+
+
+```{r}
+
+# get the limits for the color gradient in the heatmaps
+adjmaxmin.fun <- function(borderdf, heatmapdf){# inputs are the border df with the connectivity values and corresponding adjusted upper and lower limits of the region of bistability
+  
+  # make holding vectors for max and min values
+  max.vals <- NaN*borderdf$conn1
+  min.vals <- NaN*borderdf$conn1
+  
+  for(i in 1:length(borderdf$conn1)){# for each connectivity value
+    
+    # subset out the Acrit values for the ith connectivity value and with the urchin densities within the adjusted borders
+    Acrit.sub <- heatmapdf$Acrit[which(heatmapdf$conn == borderdf$conn1[i] & heatmapdf$urchins <borderdf$threshu[i]& heatmapdf$urchins > borderdf$threshl[i])]
+    
+    if(length(Acrit.sub)==0){ # if region is too small to have any observations (the sd local dist case)
+    max.vals[i] <- NA
+    min.vals[i] <- NA
+      
+    } else {
+    
+    max.vals[i] <- max(Acrit.sub, na.rm = T)# save the max Acrit in this region for the ith conn
+    min.vals[i] <- min(Acrit.sub, na.rm = T)# save the min Acrit
+    
+    }
+  }
+  
+  allmax <- max(max.vals, na.rm = T)# get the overall max across all the conn vals
+  allmin <- min(min.vals, na.rm = T)# get the overall min
+  
+  return(c(allmax, allmin))# return a vector where the first element is the overall max and the second element is the overall min
+  
+} 
+ 
+#View(loc.Acrit.s.df)
+#loc.Acrit.s.border
+
+#adjmaxmin.fun(loc.Acrit.s.border, loc.Acrit.s.df)
+
+#adjmaxmin.fun(loc.Acrit.sd.border, loc.Acrit.sd.df)[1]
+
+# get the overall max kelp threshold (for upper limit of color gradient)
+all.max <- max(
+  adjmaxmin.fun(loc.Acrit.s.border, loc.Acrit.s.df)[1],
+  adjmaxmin.fun(loc.Acrit.d.border, loc.Acrit.d.df)[1],
+  adjmaxmin.fun(loc.Acrit.sd.border, loc.Acrit.sd.df)[1],
+  adjmaxmin.fun(reg.Acrit.s.border, reg.Acrit.s.df)[1],
+  adjmaxmin.fun(reg.Acrit.d.border, reg.Acrit.d.df)[1],
+  adjmaxmin.fun(reg.Acrit.sd.border, reg.Acrit.sd.df)[1]
+  
+) + 0.05 # need to make a small adjustment otherwise the border squares that are outside of the range limits become NA in the heatmap and turn white
+
+# get the overall min kelp threshold (for lower limit of color gradient)
+all.min <- min(
+  adjmaxmin.fun(loc.Acrit.s.border, loc.Acrit.s.df)[2],
+  adjmaxmin.fun(loc.Acrit.d.border, loc.Acrit.d.df)[2],
+  adjmaxmin.fun(loc.Acrit.sd.border, loc.Acrit.sd.df)[2],
+  adjmaxmin.fun(reg.Acrit.s.border, reg.Acrit.s.df)[2],
+  adjmaxmin.fun(reg.Acrit.d.border, reg.Acrit.d.df)[2],
+  adjmaxmin.fun(reg.Acrit.sd.border, reg.Acrit.sd.df)[2]
+  
+)
+
+
+```
+
+## plot Fig 3
+
+```{r}
+# format the data frames: filter out cases where A2low = false, group by connectivity, get max urchin density
+A2high.s.df <- loc.Acrit.s.df %>% filter(A2low == "F") %>% group_by(conn) %>% summarize(urchins = max(urchins))
+
+A2high.d.df <- loc.Acrit.d.df %>% filter(A2low == "F") %>% group_by(conn) %>% summarize(urchins = max(urchins))
+
+A2high.sd.df <- loc.Acrit.sd.df %>% filter(A2low == "F") %>% group_by(conn) %>% summarize(urchins = max(urchins))
+
+# check the dashed lines in the local scenarios are flat: max and mins should be the same values
+#min(A2high.s.df$urchins)
+#max(A2high.s.df$urchins)
+
+#min(A2high.d.df$urchins)
+#max(A2high.d.df$urchins)
+
+#min(A2high.sd.df$urchins)
+#max(A2high.sd.df$urchins)
+
+```
+
+Make the panels
+```{r}
+# need to adjust the sizing of the plots to avoid distortion when putting them altogether
+# see https://www.christophenicault.com/post/understand_size_dimension_ggplot2/ for explanation
+# see https://statisticsglobe.com/change-font-size-of-ggplot2-plot-in-r-axis-text-main-title-legend for info on changing text size in ggplot
+# see https://www.statology.org/ggplot2-legend-size/ for changing legend size
+loc.Acrit.s.plot <- ggplot(data = loc.Acrit.s.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  # heatmap tile border: https://r-charts.com/correlation/heat-map-ggplot2/
+  #geom_segment(x = min(A2high.s.df$conn), y = min(A2high.s.df$urchins) - 0.5, xend = max(A2high.s.df$conn), yend = max(A2high.s.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+# for making dashed line just in bistable region: needs to be before polygon
+  geom_polygon(data=loc.Acrit.s.pol, aes(fill = value, group = id, subgroup = subid))+
+  geom_segment(x = min(loc.Acrit.s.df$conn), y = min(A2high.s.df$urchins) - 0.5, xend = max(loc.Acrit.s.df$conn), yend = max(A2high.s.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+# note the -0.5 is to make it line up with where the upper bistability threshold intersects 0 in the figure, which is slightly adjusted b/c the line is so thick
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#use expand to remove margins around the axes, customize labels so the say 0 and 1 instead of 0.00 and 1.00
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("a) Spores only, local disturbance")+
+  annotate("text",x=0.7, y=4.5, label="Disturbed patch \nalways recovers", size = 8/.pt)+ 
+  annotate("text",x=0.35, y=25, label="Both patches \nare barrens", size = 8/.pt)+
+  annotate("text",x=0.5, y=12, label="Disturbed patch recovers \nif kelp > threshold", size = 8/.pt)+#NOTE use annotate not geom_text b/c geom_text plots they text for every row in the data so it gets very bold and pixilated, see https://stackoverflow.com/questions/11618392/ggplot-text-printed-by-geom-text-is-not-clear
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none", plot.title = element_text(size = 8), axis.text = element_text(size = 7))+#remove gridlines and legend
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=loc.Acrit.s.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=loc.Acrit.s.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)
+
+#drift
+loc.Acrit.d.plot <- ggplot(data = loc.Acrit.d.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  #geom_segment(x = min(A2high.d.df$conn), y = min(A2high.d.df$urchins)-0.5, xend = max(A2high.d.df$conn), yend = max(A2high.d.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+
+  geom_polygon(data=loc.Acrit.d.pol, aes(fill = value, group = id, subgroup = subid))+
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#remove margins around the axes
+  geom_segment(x = min(loc.Acrit.d.df$conn), y = min(A2high.d.df$urchins)-0.5, xend = max(loc.Acrit.d.df$conn), yend = max(A2high.d.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("b) Drift only, local disturbance")+
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none", plot.title = element_text(size = 8), axis.text = element_text(size = 7))+#remove gridlines
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=loc.Acrit.d.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=loc.Acrit.d.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)
+
+# both 
+loc.Acrit.sd.plot <- ggplot(data = loc.Acrit.sd.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  #geom_segment(x = min(A2high.sd.df$conn), y = min(A2high.sd.df$urchins)-0.5, xend = max(A2high.sd.df$conn), yend = max(A2high.sd.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+
+  geom_polygon(data=loc.Acrit.sd.pol, aes(fill = value, group = id, subgroup = subid))+
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#remove margins around the axes
+  geom_segment(x = min(loc.Acrit.sd.df$conn), y = min(A2high.sd.df$urchins)-0.5, xend = max(loc.Acrit.sd.df$conn), yend = max(A2high.sd.df$urchins)-0.5, linewidth = 0.25, linetype = 2, inherit.aes=F)+
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("c) Spores & drift, local disturbance")+
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = c(0.8,0.32), legend.background = element_rect(fill="white",linewidth=0.5, linetype="solid",colour ="black"), plot.title = element_text(size = 8), axis.text = element_text(size = 7), legend.text = element_text(size = 7), legend.title = element_text(size = 7), legend.key.size = unit(0.3, 'cm'))+#remove gridlines, change legend position, add unfilled black box around the legend
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=loc.Acrit.sd.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=loc.Acrit.sd.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)+
+  labs(fill = "Threshold \nkelp density")
+
+# regional
+# spores only
+reg.Acrit.s.plot <- ggplot(data = reg.Acrit.s.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  geom_polygon(data=reg.Acrit.s.pol, aes(fill = value, group = id, subgroup = subid))+
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#remove margins around the axes
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("d) Spores only, regional disturbance")+
+  annotate("text",x=0.6, y=2.5, label="Both patches always recover", size = 8/.pt)+ # was y = 1.5
+  annotate("text",x=0.35, y=25, label="Both patches \nare barrens", size = 8/.pt)+
+  annotate("text",x=0.5, y=12, label="Patches recover \nif kelp > threshold", size = 8/.pt)+
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),legend.position = "none", plot.title = element_text(size = 8), axis.text = element_text(size = 7))+#remove gridlines
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=reg.Acrit.s.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=reg.Acrit.s.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)
+
+#drift
+reg.Acrit.d.plot <- ggplot(data = reg.Acrit.d.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  geom_polygon(data=reg.Acrit.d.pol, aes(fill = value, group = id, subgroup = subid))+
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#remove margins around the axes
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("e) Drift only, regional disturbance")+
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none", plot.title = element_text(size = 8), axis.text = element_text(size = 7))+#remove gridlines
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=reg.Acrit.d.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=reg.Acrit.d.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)
+
+
+# both 
+reg.Acrit.sd.plot <- ggplot(data = reg.Acrit.sd.df, mapping = aes(x = conn,y = urchins, fill = Acrit)) +
+  geom_tile() +
+  geom_polygon(data=reg.Acrit.sd.pol, aes(fill = value, group = id, subgroup = subid))+
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), labels = c("0", "0.25", "0.5", "0.75", "1")) +#remove margins around the axes
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(label = "Connectivity") +
+  ylab(label="Urchin density") +
+  ggtitle("f) Spores & drift, regional disturbance")+
+   theme_bw() + #make the background white not gray
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "none", plot.title = element_text(size = 8), axis.text = element_text(size = 7))+#remove gridlines
+  scale_fill_gradient2(low = "white", mid ="white", high="darkgreen", midpoint =0,na.value="white", limit = c(all.min,all.max))+#need to make polygon value=low and midpoint=low value to make the whole polygon white
+  geom_line(data=reg.Acrit.sd.border, mapping =aes(x = conn1,y = threshl), color = "black", inherit.aes=F, linewidth=0.8)+
+  geom_line(data=reg.Acrit.sd.border, mapping =aes(x = conn1,y = threshu), color = "black", inherit.aes=F, linewidth=0.8)
+
+```
+
+
+```{r}
+# use ggarrange() in ggpubr package
+# see https://rpkgs.datanovia.com/ggpubr/reference/ggarrange.html
+
+#pdf()
+hmfig <- ggarrange(loc.Acrit.s.plot + rremove("ylab") + rremove("xlab"), loc.Acrit.d.plot + rremove("ylab") + rremove("xlab"), loc.Acrit.sd.plot + rremove("ylab") + rremove("xlab"), reg.Acrit.s.plot + rremove("ylab") + rremove("xlab"), reg.Acrit.d.plot + rremove("ylab") + rremove("xlab"),
+reg.Acrit.sd.plot + rremove("ylab") + rremove("xlab"), ncol = 3, nrow = 3, align  = "hv")
+#dev.off()
+# see https://github.com/kassambara/ggpubr/issues/78 for adding common axis labels with ggarrange
+
+pdf("Fig3Acrit.pdf")
+annotate_figure(hmfig, left = text_grob(expression("Urchin density (ind./m"^2*")"), rot = 90, hjust = -0.2), bottom = text_grob("Connectivity", vjust = -18))# the hjust and vjust controls the positioning of the label #hjust = -0.75
+dev.off()
+# see https://rpkgs.datanovia.com/ggpubr/reference/text_grob.html for more info on text_grob
+
+
+```
+
+# Figure 4
+
+## metapars
+
+define parameters used in all simulations below
+```{r}
+#set of connectivity values (here just looking at the highest connectivity case)
+cvals <- c(1)
+#cvals <- c(0.2, 1)
+
+```
+
+## functions
+
+define functions that, for each type of connectivity, return the upper and lower thresholds of the region of bistability
+
+### homogeneous 
+
+urchin densities are the same in each patch
+
+```{r}
+#for each connectivity value in cvals, want to find the critical threshold when both patches have the same urchin density. This is the max value for u1.
+
+# make function of indicators for type of connectivity and patch initial conditions (high or low for upper and lower thresholds)
+# Is = 1 or 0 means with or without spore connectivity, respectively, same with Id for drift conn, I0 = 1 means low initial conditions in both patches, I0=2 means high initial conditions in both patches, loweru and upperu are the first upper and lower urchin densities to test
+uhomfun <- function(Is, Id, I0, loweru, upperu){
+
+#holding vector for the critical urchin densities for each level of connectivity
+ucrit.f <- NaN*cvals
+
+
+for(j in 1:length(cvals)){
+
+#set the first upper and lower urchin density to test
+lower <- loweru
+upper <- upperu
+
+
+while(upper-lower > 1*10^-5){#while the difference between the upper and lower bounds is greater than 10^-5
+  
+  mid = (upper + lower)/2#calculate the mid point
+  
+  # assign the urchin density
+	#u <- mid
+	
+	#assign the par vals (with urchin density in both patches = mid)
+	parset = c(cs1 = cvals[j]*Is, cs2 = cvals[j]*Is, cd1=cvals[j]*Id, cd2=cvals[j]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = mid, u2=mid)
+
+	# initial conditions
+  ic.f <- c(G1 = G0.set[I0], J1= J0.set[I0], A1= A0.set[I0], G2 = G0.set[I0], J2= J0.set[I0], A2= A0.set[I0])#initial conditions  
+  
+#simulate the model
+  results.f <- ode(ic.f, times1, mod.fun2, parset, method = "lsodes")
+  #save the A1 values
+  A.f <- results.f[ ,4]
+
+  Astar <- A.f[length(times1)]
+ 
+  
+  if(Astar > Athresh){#if A* for u=mid is greater than the cutoff for the high state (in high state)
+    lower <- mid #the mid point is too low (since A decreases w/ increasing u), so mid is the new lower bound
+  } else if (Astar < Athresh) {#if A* for u=mid is less than the cutoff (in low state)
+    upper <- mid# the mid point is too high, so mid is the new upper bound
+  } else {
+    upper <- lower#if A*=thresh, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+  
+  #print(mid)
+}
+
+# the mid point at which the while loop ends is the ucrit value
+
+ucrit.f[j] <- mid
+
+}
+
+return(ucrit.f)
+
+}
+
+```
+
+### heterogeneous
+
+urchin densities can differ between the patches
+
+```{r}
+
+# function of same parameters as the homogeneous function, as well as the set of urchin densities in patch 1 to iterate over (for each value of u1, will find the upper and lower critical urchin densities in patch 2)
+uhetfun <- function(Is, Id, I0, loweru, upperu, u1vals.f){
+  
+#make corresponding holding vectors for the u2crit values
+u2crit.f <- matrix(NaN, nrow = length(u1vals.f), ncol = length(cvals))
+
+#make holding matrix for the A1 values (want to see whether A1 is in high or low state)
+A1state.f <- matrix(NaN, nrow = length(u1vals.f), ncol = length(cvals))
+
+
+for(j in 1:length(cvals)){
+  
+  #set the vector of u1vals
+  
+  for(i in 1:length(u1vals.f)){
+  #want to find u2crit
+  
+#set the first upper and lower urchin density to test
+lower <- loweru #start a little below the threshold in the absence of connectivity
+upper <- upperu#ATTENTION: should change the upper threshold upperu based on a coarse initial run for each scenario to save computing time
+
+
+while(upper-lower > 1*10^-5){#while the difference between the upper and lower bounds is greater than 10^-5
+  
+  mid = (upper + lower)/2#calculate the mid point
+  
+  # assign the urchin density
+	#u <- mid
+	
+	#assign the par vals (with urchin density in both patches = mid)
+	parset = c(cs1 = cvals[j]*Is, cs2 = cvals[j]*Is, cd1=cvals[j]*Id, cd2=cvals[j]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = u1vals.f[i], u2=mid)
+
+	# initial conditions: low
+  ic.f <- c(G1 = G0.set[I0], J1= J0.set[I0], A1= A0.set[I0], G2 = G0.set[I0], J2= J0.set[I0], A2= A0.set[I0])#initial conditions  
+  
+#simulate the model
+  results.f <- ode(ic.f, times1, mod.fun2, parset, method = "lsodes")
+  #save the A2 values
+  A.f <- results.f[ ,7]
+
+  Astar <- A.f[length(times1)]
+ 
+  
+  if(Astar > Athresh){#if A* for u=mid is greater than the cutoff for the high state (in high state)
+    lower <- mid #the mid point is too low (since A decreases w/ increasing u), so mid is the new lower bound
+  } else if (Astar < Athresh) {#if A* for u=mid is less than the cutoff (in low state)
+    upper <- mid# the mid point is too high, so mid is the new upper bound
+  } else {
+    upper <- lower#if A*=thresh, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+  
+  #print(mid)
+}
+
+# the mid point at which the while loop ends is the ucrit value
+
+u2crit.f[i, j] <- mid
+
+#save the final value of A1
+A1.set <- results.f[ ,4]
+
+A1state.f[i, j] <- A1.set[length(times1)]
+
+}
+
+}
+
+return(list(u2crit.f, A1state.f))
+
+}
+
+
+
+# for the drift only, lower threshold case (Is ==0 & Id==1 & I0=1), needed to increase the error tolerance of the ODE solver to keep the model from blowing up near u2crit, so make another function for this case that is the same as above but has a higher error tolerance in the deSolve ode() function
+uhetfunLowtol <- function(Is, Id, I0, loweru, upperu, u1vals.f){
+  
+#make corresponding holding vectors for the u2crit values
+u2crit.f <- matrix(NaN, nrow = length(u1vals.f), ncol = length(cvals))
+
+#make holding matrix for the A1 values (want to see whether A1 is in high or low state)
+A1state.f <- matrix(NaN, nrow = length(u1vals.f), ncol = length(cvals))
+
+
+for(j in 1:length(cvals)){
+  
+  #set the vector of u1vals
+  
+  for(i in 1:length(u1vals.f)){
+  #want to find u2crit
+  
+#set the first upper and lower urchin density to test
+lower <- loweru #start a little below the threshold in the absence of connectivity
+upper <- upperu#ATTENTION: also change the upper threshold based on the coarse initial run
+
+
+while(upper-lower > 1*10^-5){#while the difference between the upper and lower bounds is greater than 10^-5
+  
+  mid = (upper + lower)/2#calculate the mid point
+  
+  # assign the urchin density
+	#u <- mid
+	
+	#assign the par vals (with urchin density in both patches = mid)
+	parset = c(cs1 = cvals[j]*Is, cs2 = cvals[j]*Is, cd1=cvals[j]*Id, cd2=cvals[j]*Id, exts1=0, exts2=0, extd1=0, extd2=0, ls1, ls2, ld1, ld2, rho, rG, muG, rJ, muJ, K1, K2, muA, qG, qJ, g, p, d, gd, b, u1 = u1vals.f[i], u2=mid)
+
+	# initial conditions: low
+  ic.f <- c(G1 = G0.set[I0], J1= J0.set[I0], A1= A0.set[I0], G2 = G0.set[I0], J2= J0.set[I0], A2= A0.set[I0])#initial conditions  
+  
+#simulate the model
+# for the low threshold, drift only case the model was blowing up around the threhold u2 density so needed to lower the error tolerance (see https://rdrr.io/cran/deSolve/man/lsodes.html)
+  results.f <- ode(ic.f, times1, mod.fun2, parset, method = "lsodes", rtol = 1e-15, atol = 1e-15)
+  #save the A2 values
+  A.f <- results.f[ ,7]
+
+  Astar <- A.f[length(times1)]
+ 
+  
+  if(Astar > Athresh){#if A* for u=mid is greater than the cutoff for the high state (in high state)
+    lower <- mid #the mid point is too low (since A decreases w/ increasing u), so mid is the new lower bound
+  } else if (Astar < Athresh) {#if A* for u=mid is less than the cutoff (in low state)
+    upper <- mid# the mid point is too high, so mid is the new upper bound
+  } else {
+    upper <- lower#if A*=thresh, then the mid point is the critical value, so stop the while loop by setting the upper bound equal to the lower bound
+  } 
+  
+  #print(mid)
+}
+
+# the mid point at which the while loop ends is the ucrit value
+
+u2crit.f[i, j] <- mid
+
+#save the final value of A1
+A1.set <- results.f[ ,4]
+
+A1state.f[i, j] <- A1.set[length(times1)]
+
+}
+
+}
+
+return(list(u2crit.f, A1state.f))
+
+}
+
+```
+
+
+
+## simulations
+
+run the simulations
+
+### homogeneous
+
+calculate the threshold urchin densities denoting the different regions of kelp stability (high only, bistable, low only) when both patches have the same urchin density
+
+```{r}
+# uhomfun <- function(Is, Id, I0, loweru, upperu){
+
+tic()
+# no conn (Is = Id = 0)
+## lower
+ucritl.0 <- uhomfun(0, 0, 1, 0, 60)
+## upper 
+ucrith.0 <- uhomfun(0, 0, 2, 0, 60)
+
+# spores only
+## lower
+ucritl.s <- uhomfun(1, 0, 1, 0, 60)
+## upper
+ucrith.s <- uhomfun(1, 0, 2, 0, 80)
+
+# drift only
+## lower
+ucritl.d <- uhomfun(0, 1, 1, 0, 60)
+## upper
+ucrith.d <- uhomfun(0, 1, 2, 0, 80)
+
+# both
+## lower
+ucritl.sd <- uhomfun(1, 1, 1, 0, 60)
+## upper
+ucrith.sd <- uhomfun(1, 1, 2, 0, 80)
+
+toc() #12.304 sec
+
+```
+
+### heterogeneous
+
+calculate the threshold urchin densities denoting the different regions of kelp stability (high only, bistable, low only) when urchin density differs between the patches
+
+Note this takes around 25 min to run
+```{r}
+
+# for the cases where connectivity > 0,  get the set of u1 values (keep length constant, but adjust the mins and maxes for each case - first run a coarse simulation to get an idea of what these should be). For each u1 value, find the critical urchin threshold for u2 (below which only the high state is stable - if you start from low initial conditions, what is the highest urchin density for which you can still recover).
+
+# uhetfun <- function(Is, Id, I0, loweru, upperu, u1vals.f){
+
+tic()
+
+# spores only
+## lower threshold
+#make the u1vals (use unique sort to make sure the threshold values for the two non-zero connectivity values are included)
+#u1vals.l.s <- sort(unique(c(seq(from = 0, to = 20, length.out = 10), ucritl.s[2:3]))) # courser run to get an idea of what the upper value of uset should be
+#actual: higher resolution 
+u1vals.l.s <- sort(unique(c(seq(from = 0, to = 10, length.out = 100), ucritl.s[2:3], 70)))#choose the same max value to make it consistent across all the simulations (so use whatever the max value is in the high connectivity, drift and spore input case; 70 seems to be enough)
+uhetsims.l.s <- uhetfun(1, 0, 1, 0, 15, u1vals.l.s)
+u2critl.s <- uhetsims.l.s[[1]]
+A1state.l.s <- uhetsims.l.s[[2]]
+
+## upper threhold
+#u1vals.h.s <- sort(unique(c(seq(from = 0, to = 70, length.out = 10), ucrith.s[2:3])))
+u1vals.h.s <- sort(unique(c(seq(from = 0, to = 40, length.out = 200), ucrith.s[2:3], 70)))
+uhetsims.h.s <- uhetfun(1, 0, 2, 10, 20, u1vals.h.s)
+u2crith.s <- uhetsims.h.s[[1]]
+A1state.h.s <- uhetsims.h.s[[2]]
+
+# drift only
+## lower threshold
+#u1vals.l.d <- sort(unique(c(seq(from = 0, to =  10, length.out = 5), ucritl.d[2:3])))
+u1vals.l.d <- sort(unique(c(seq(from = 0, to = 10, length.out = 100), ucritl.d[2:3], 70)))
+uhetsims.l.d <- uhetfunLowtol(0, 1, 1, 2, 40, u1vals.l.d)
+u2critl.d <- uhetsims.l.d[[1]]
+A1state.l.d <- uhetsims.l.d[[2]]
+
+## upper threshold
+#u1vals.h.d <- sort(unique(c(seq(from = 0, to = 70, length.out = 10), ucrith.d[2:3])))
+u1vals.h.d <- sort(unique(c(seq(from = 0, to = 60, length.out = 200), ucrith.d[2:3], 70)))
+uhetsims.h.d <- uhetfun(0, 1, 2, 10, 50, u1vals.h.d)
+u2crith.d <- uhetsims.h.d[[1]]
+A1state.h.d <- uhetsims.h.d[[2]]
+
+# spores and drift
+## lower threshold
+#u1vals.l.sd <- sort(unique(c(seq(from = 0, to = 40, length.out = 10), ucritl.sd[2:3])))
+u1vals.l.sd <- sort(unique(c(seq(from = 0, to = 10, length.out = 100), ucritl.sd[2:3], 70)))
+uhetsims.l.sd <- uhetfun(1, 1, 1, 0, 60, u1vals.l.sd)
+u2critl.sd <- uhetsims.l.sd[[1]]
+A1state.l.sd <- uhetsims.l.sd[[2]]
+
+## upper threshold
+#u1vals.h.sd <- sort(unique(c(seq(from = 0, to = 70, length.out = 10), ucrith.sd[2:3])))
+u1vals.h.sd <- sort(unique(c(seq(from = 0, to = 70, length.out = 200), ucrith.sd[2:3])))
+uhetsims.h.sd <- uhetfun(1, 1, 2, 10, 60, u1vals.h.sd)
+u2crith.sd <- uhetsims.h.sd[[1]]
+A1state.h.sd <- uhetsims.h.sd[[2]]
+
+toc() # takes around 1534.806 sec
+
+
+```
+
+
+## plot Fig 4
+
+
+```{r}
+# color, font, and size for the region labels
+reg.col <- "white"
+reg.font <- 1# 1 = regular, 2 = bold
+reg.size <- 1.1
+
+# color and size for background points
+pt.col <- "gray30"
+pt.size <- 2.4
+
+# color and size for points behind the background points to make the outline
+pt.col2 <- "gray30"
+pt.size2 <- 2.8
+
+# color for the low state lines
+lowstate.col <- "darkorchid3"
+
+# thicknoess for the low state lines
+lowstate.lwd <- 1.5
+
+# bistable color
+bistab.col <- "#196F3D"
+# opacity
+bistab.alpha <- 0.35#0.3
+
+# limits of x and y axies
+axis.max <- 58#54
+
+#ucritl.0
+#ucrith.0
+
+#rep(ucritl.0, length(u1vals.l.sd))
+
+#rep(ucrith.0, length(u1vals.h.sd))
+
+```
+
+```{r}
+
+pdf(file = "Fig4urchinhet.pdf", width = 6.5, height = 6)
+par(mfrow = c(2, 3), oma = c(4.5, 2.5, 0, 0))
+layout(matrix(c(1, 2, 3, 4, 5, 5), nrow = 2, ncol = 3), widths = c(1, 1, 0.3), heights = c(1, 1))
+par(mar=c(0, 1.75, 1.75, 0))# to make plot square, need asp = 1, but this messes up the axis limits, so also need par(pty = "s")
+# no connectivity
+par(pty = "s") # make plot square
+plot(u1vals.h.sd, rep(ucrith.0, length(u1vals.h.sd)), type = "l", xlim = c(0 ,axis.max), ylim = c(0 ,axis.max), asp = 1, xlab = "Urchin density in patch 1", ylab = "Urchin density in patch 2", xaxs="i", yaxs="i", las = 1, xaxt = "n")#xaxs="i" means 0% of the axis value is left on either side. Default is "r", which means 4% is left on each side (so there is white space between the edge of the plot and the axes)
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50, 60), labels = NA)
+mtext("a) No connectivity", side = 3, cex = 1, adj = 0)
+mtext(expression("Urchin density in patch 2 (ind./m"^2*")"), side = 2, cex = 1, adj = 0.5, outer = TRUE, line = 0.7)
+# patch 2 high only = high density lines at 45º angle
+polygon(x = c(u1vals.l.sd, rev(u1vals.l.sd), 0), y = c(rep(0, length(u1vals.l.sd)),rep(ucritl.0, length(u1vals.l.sd)), 0), col = NA, border = "black", density = 15, angle = 45)
+# patch 2 bistable =  no lines, green fill
+polygon(x = c(u1vals.l.sd, rev(u1vals.h.sd), 0), y = c(rep(ucritl.0, length(u1vals.l.sd)), rep(ucrith.0, length(u1vals.h.sd)), ucritl.0), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1: just switch the x's and y's from patch 2 polygons
+# patch 1 high only = high density lines at 135º angle
+polygon(x = c(rep(0, length(u1vals.l.sd)),rep(ucritl.0, length(u1vals.l.sd)), 0), y = c(u1vals.l.sd, rev(u1vals.l.sd), 0), col = NA, border = "black", density = 15, angle = 135)
+# patch 1 bistable = green
+polygon(x = c(rep(ucritl.0, length(u1vals.l.sd)), rep(ucrith.0, length(u1vals.h.sd)), ucritl.0), y = c(u1vals.l.sd, rev(u1vals.h.sd), 0), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1 low only = low density purple lines at 90º angle
+polygon(x = c(rep(ucrith.0, length(u1vals.h.sd)), rep(max(u1vals.h.sd), length(u1vals.h.sd)), ucrith.0), y = c(u1vals.h.sd, rev(u1vals.h.sd), 0), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =90)
+# patch 2 low only = low density purple lines at 0º angle (put low only at the end so lines are above the rest of the plot)
+polygon(x = c(u1vals.h.sd, rev(u1vals.h.sd), 0), y = c(rep(ucrith.0, length(u1vals.h.sd)), rep(max(u1vals.h.sd), length(u1vals.h.sd)), ucrith.0), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =0)
+lines(u1vals.h.sd, rep(ucrith.0, length(u1vals.h.sd)), type = "l", col = "black", lwd = 3)# NOTE to make the borders of the polygons thicker, could change the lwd of these lines. To make the lines show, need to plot the lines after the polygons
+lines(u1vals.l.sd, rep(ucritl.0, length(u1vals.l.sd)), type = "l", col = "black", lwd = 3)
+lines(rep(ucrith.0, length(u1vals.h.sd)), u1vals.h.sd, type = "l", col = "black", lwd = 3)
+lines(rep(ucritl.0, length(u1vals.l.sd)), u1vals.l.sd, type = "l", col = "black", lwd = 3)
+# points to make the border of the region labels
+points(x = 1.2, y = 1.2, col = pt.col2, cex = 2.5, pch = 16)
+points(x = 10, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 10, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 10, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+# points to make the background for the region labels (need to be plotted before the labels)
+points(x = 1, y = 1, col = pt.col, cex = 2, pch = 16)
+points(x = 10, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 35, col = pt.col, cex = pt.size, pch = 16)
+points(x = 10, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 10, y = 35, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 35, col = pt.col, cex = pt.size, pch = 16)
+# label the regions
+text(x = 1, y = 1, "1", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 1.7, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 10, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 1.7, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 35, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 10, "4", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 10, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 35, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 35, "6", col = reg.col, font = reg.font, cex = reg.size)
+
+# drift connectivity
+par(pty = "s")
+plot(u1vals.h.d, u2crith.d[,1], type = "l", xlim = c(0 ,axis.max), ylim = c(0 ,axis.max), asp = 1, xlab = "Urchin density in patch 1", ylab = "Urchin density in patch 2", xaxs="i", yaxs="i", las = 1, col = NA)
+mtext("c) Drift only", side = 3, cex = 1, adj = 0)
+mtext(expression("Urchin density in patch 1 (ind./m"^2*")"), side = 1, cex = 1, adj = 0.4, outer = TRUE, line = 2.5)
+# patch 2 high only = high density lines at 45º angle
+polygon(x = c(u1vals.l.d, rev(u1vals.l.d), 0), y = c(rep(0, length(u1vals.l.d)),rev(u2critl.d[,1]), 0), col = NA, border = NA, density = 15, angle = 45)
+# patch 2 bistable= green
+polygon(x = c(u1vals.l.d, rev(u1vals.h.d), 0), y = c(u2critl.d[,1], rev(u2crith.d[,1]), u2critl.d[1,1]), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1: just switch the x's and y's from patch 2 polygons
+# patch 1 high only = high density lines at 135º angle
+polygon(x = c(rep(0, length(u1vals.l.d)),rev(u2critl.d[,1]), 0), y = c(u1vals.l.d, rev(u1vals.l.d), 0), col = NA, border = "black", density = 15, angle = 135)
+# patch 1 bistable = green
+polygon(x = c(u2critl.d[,1], rev(u2crith.d[,1]), u2critl.d[1,1]), y = c(u1vals.l.d, rev(u1vals.h.d), 0), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1 low only = low density purple lines at 90º angle
+polygon(x = c(u2crith.d[,1], rep(max(u1vals.h.d), length(u1vals.h.d)), u2crith.d[1,1]), y = c(u1vals.h.d, rev(u1vals.h.d), 0), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =90)
+# patch 2 low only = low density purple lines at 0º angle
+polygon(x = c(u1vals.h.d, rev(u1vals.h.d), 0), y = c(u2crith.d[,1], rep(max(u1vals.h.d), length(u1vals.h.d)), u2crith.d[1,1]), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =0)
+lines(u1vals.h.d, u2crith.d[,1], type = "l", col = "black", lwd = 3)
+lines(u1vals.l.d, u2critl.d[,1], type = "l", col = "black", lwd = 3)
+lines(u2crith.d[,1], u1vals.h.d, type = "l", col = "black", lwd = 3)
+lines(u2critl.d[,1], u1vals.l.d, type = "l", col = "black", lwd = 3)
+# points to make the border of the region labels
+points(x = 2, y = 2, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 40, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 40, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 50, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 50, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 18, y = 18, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 50, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 10, y = 50, col = pt.col2, cex = pt.size2, pch = 16)
+#points(x = 45, y = 45, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+# points to make the background for the region labels (need to be plotted before the labels)
+points(x = 2, y = 2, col = pt.col, cex = pt.size, pch = 16)
+points(x = 40, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 40, col = pt.col, cex = pt.size, pch = 16)
+points(x = 50, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 50, col = pt.col, cex = pt.size, pch = 16)
+points(x = 18, y = 18, col = pt.col, cex = pt.size, pch = 16)
+points(x = 50, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 10, y = 50, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 35, col = pt.col, cex = pt.size, pch = 16)
+# label the regions
+text(x = 2, y = 2, "1", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 40, y = 1.7, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 40, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 50, y = 1.7, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 50, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 18, y = 18, "4", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 50, y = 10, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 50, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 35, "6", col = reg.col, font = reg.font, cex = reg.size)
+
+
+# spore connectivity
+par(pty = "s")
+plot(u1vals.h.s, u2crith.s[,1], type = "l", xlim = c(0 ,axis.max), ylim = c(0 ,axis.max), asp = 1, xlab = "Urchin density in patch 1", ylab = "Urchin density in patch 2", xaxs="i", yaxs="i", las = 1, col = NA, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 10, 20, 30, 40, 50, 60), labels = NA)
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50, 60), labels = NA)
+mtext("b) Spores only", side = 3, cex = 1, adj = 0)
+# patch 2 high only = high density lines at 45º angle
+polygon(x = c(u1vals.l.s, rev(u1vals.l.s), 0), y = c(rep(0, length(u1vals.l.s)),rev(u2critl.s[,1]), 0), col = NA, border = NA, density = 15, angle = 45)
+# patch 2 bistable =  green
+polygon(x = c(u1vals.l.s, rev(u1vals.h.s), 0), y = c(u2critl.s[,1], rev(u2crith.s[,1]), u2critl.s[1,1]), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1: just switch the x's and y's from patch 2 polygons
+# patch 1 high only = high density lines at 135º angle
+polygon(x = c(rep(0, length(u1vals.l.s)),rev(u2critl.s[,1]), 0), y = c(u1vals.l.s, rev(u1vals.l.s), 0), col = NA, border = "black", density = 15, angle = 135)
+# patch 1 bistable = green
+polygon(x = c(u2critl.s[,1], rev(u2crith.s[,1]), u2critl.s[1,1]), y = c(u1vals.l.s, rev(u1vals.h.s), 0), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1 low only = low density purple lines at 90º angle
+polygon(x = c(u2crith.s[,1], rep(max(u1vals.h.s), length(u1vals.h.s)), u2crith.s[1,1]), y = c(u1vals.h.s, rev(u1vals.h.s), 0), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =90)
+# patch 2 low only = low density purple lines at 0º angle
+polygon(x = c(u1vals.h.s, rev(u1vals.h.s), 0), y = c(u2crith.s[,1], rep(max(u1vals.h.s), length(u1vals.h.s)), u2crith.s[1,1]), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =0)
+lines(u1vals.h.s, u2crith.s[,1], type = "l", col = "black", lwd = 3)
+lines(u1vals.l.s, u2critl.s[,1], type = "l", col = "black", lwd = 3)
+lines(u2crith.s[,1], u1vals.h.s, type = "l", col = "black", lwd = 3)
+lines(u2critl.s[,1], u1vals.l.s, type = "l", col = "black", lwd = 3)
+# points to make the border of the region labels
+points(x = 2, y = 2, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 13, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 13, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 1.7, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.7, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 12, y = 12, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 10, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+# points to make the background for the region labels (need to be plotted before the labels)
+points(x = 2, y = 2, col = pt.col, cex = pt.size, pch = 16)
+points(x = 13, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 13, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 1.7, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.7, y = 35, col = pt.col, cex = pt.size, pch = 16)
+points(x = 12, y = 12, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 10, y = 35, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 35, col = pt.col, cex = pt.size, pch = 16)
+# label the regions
+text(x = 2, y = 2, "1", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 13, y = 1.7, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 13, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 1.7, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.7, y = 35, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 12, y = 12, "4", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 10, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 35, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 35, "6", col = reg.col, font = reg.font, cex = reg.size)
+
+
+# sd high connectivity
+par(pty = "s")
+plot(u1vals.h.sd, u2crith.sd[,1], type = "l", xlim = c(0 ,axis.max), ylim = c(0 ,axis.max), asp = 1, xlab = "Urchin density in patch 1", ylab = "Urchin density in patch 2", xaxs="i", yaxs="i", las = 1, col = NA, yaxt = "n")
+axis(side = 2, at = c(0, 10, 20, 30, 40, 50, 60), labels = NA)
+mtext("d) Spores and drift", side = 3, cex = 1, adj = 0)
+# patch 2 high only = high density lines at 45º angle
+polygon(x = c(u1vals.l.sd, rev(u1vals.l.sd), 0), y = c(rep(0, length(u1vals.l.sd)),rev(u2critl.sd[,1]), 0), col = NA, border = NA, density = 15, angle = 45)
+# patch 2 bistable =  green
+polygon(x = c(u1vals.l.sd, rev(u1vals.h.sd), 0), y = c(u2critl.sd[,1], rev(u2crith.sd[,1]), u2critl.sd[1,1]), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1: just switch the x's and y's from patch 2 polygons
+# patch 1 high only = high density lines at 135º angle
+polygon(x = c(rep(0, length(u1vals.l.sd)),rev(u2critl.sd[,1]), 0), y = c(u1vals.l.sd, rev(u1vals.l.sd), 0), col = NA, border = "black", density = 15, angle = 135)
+# patch 1 bistable = green
+polygon(x = c(u2critl.sd[,1], rev(u2crith.sd[,1]), u2critl.sd[1,1]), y = c(u1vals.l.sd, rev(u1vals.h.sd), 0), col =adjustcolor(bistab.col, alpha.f=bistab.alpha), border = "black")
+# patch 1 low only = low density purple lines at 90º angle
+polygon(x = c(u2crith.sd[,1], rep(max(u1vals.h.sd), length(u1vals.h.sd)), u2crith.sd[1,1]), y = c(u1vals.h.sd, rev(u1vals.h.sd), 0), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =90)
+# patch 2 low only = low density purple lines at 0º angle
+polygon(x = c(u1vals.h.sd, rev(u1vals.h.sd), 0), y = c(u2crith.sd[,1], rep(max(u1vals.h.sd), length(u1vals.h.sd)), u2crith.sd[1,1]), col =lowstate.col,lwd=lowstate.lwd, border = "black", density = 5, angle =0)
+lines(u1vals.h.sd, u2crith.sd[,1], type = "l", col = "black", lwd = 3)
+lines(u1vals.l.sd, u2critl.sd[,1], type = "l", col = "black", lwd = 3)
+lines(u2crith.sd[,1], u1vals.h.sd, type = "l", col = "black", lwd = 3)
+lines(u2critl.sd[,1], u1vals.l.sd, type = "l", col = "black", lwd = 3)
+# points to make the border of the region labels
+points(x = 2, y = 2, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 54.5, y = 1.8, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 1.8, y = 54.5, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 20, y = 20, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 54.5, y = 10, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 10, y = 54.5, col = pt.col2, cex = pt.size2, pch = 16)
+#points(x = 45, y = 45, col = pt.col2, cex = pt.size2, pch = 16)
+points(x = 35, y = 35, col = pt.col2, cex = pt.size2, pch = 16)
+# points to make the background for the region labels (need to be plotted before the labels)
+points(x = 2, y = 2, col = pt.col, cex = pt.size, pch = 16)
+#points(x = 35, y = 1, col = pt.col, cex = pt.size, pch = 16)
+#points(x = 1, y = 35, col = pt.col, cex = pt.size, pch = 16)
+points(x = 54.5, y = 1.8, col = pt.col, cex = pt.size, pch = 16)
+points(x = 1.8, y = 54.5, col = pt.col, cex = pt.size, pch = 16)
+points(x = 20, y = 20, col = pt.col, cex = pt.size, pch = 16)
+points(x = 54.5, y = 10, col = pt.col, cex = pt.size, pch = 16)
+points(x = 10, y = 54.5, col = pt.col, cex = pt.size, pch = 16)
+points(x = 35, y = 35, col = pt.col, cex = pt.size, pch = 16)
+# label the regions
+text(x = 2, y = 2, "1", col = reg.col, font = reg.font, cex = reg.size)
+#text(x = 35, y = 1, "2", col = reg.col, font = reg.font, cex = reg.size)
+#text(x = 1, y = 35, "2", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 54.5, y = 1.8, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 1.8, y = 54.5, "3", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 20, y = 20, "4", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 54.5, y = 10, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 10, y = 54.5, "5", col = reg.col, font = reg.font, cex = reg.size)
+text(x = 35, y = 35, "6", col = reg.col, font = reg.font, cex = reg.size)
+
+# plot the legend
+plot(0,type='n',axes=FALSE, ann = FALSE)# empty plot
+legend(x="topleft", legend = c("high", "bistable", "low"), fill = c(NA, adjustcolor(bistab.col, alpha.f=bistab.alpha), lowstate.col),border = c("black", adjustcolor(bistab.col, alpha.f=bistab.alpha), lowstate.col), density = c(30, NA, 20),angle = c(135, NA, 90), ncol = 1, bty = "n", title="Patch 1 \nstability", xpd = TRUE, inset = c(-0.5,-3.8), cex = 1.5)# use xpd = TRUE and inset to have more control moving the legend position around #cex = 1.3
+legend(x="bottomleft", legend = c("high", "bistable", "low"), fill = c(NA, adjustcolor(bistab.col, alpha.f=bistab.alpha), lowstate.col),border = c("black", adjustcolor(bistab.col, alpha.f=bistab.alpha), lowstate.col), density = c(30, NA, 20),angle = c(45, NA, 0), ncol = 1, bty = "n", title="Patch 2 \nstability",  xpd = TRUE, inset = c(-0.5,1), cex = 1.5)
+# info on boxes in legends: https://stackoverflow.com/questions/15618079/legend-with-color-filling-and-shading-lines-in-base-r
+
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
