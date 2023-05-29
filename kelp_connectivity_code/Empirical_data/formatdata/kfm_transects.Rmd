@@ -1,0 +1,386 @@
+---
+title: "kfm_transects"
+author: "Raine Detmer"
+date: '2023-05-27'
+output: html_document
+---
+
+README: code to match the KFM transects to patches (don't make this public, since I'm not sure whether I can share the transect orientations or if people have to go through David Kushner)
+
+# packages
+```{r}
+library("tidyverse")
+
+library("lubridate")
+
+library("sf")
+
+library("sp")
+
+library("spatialEco")#for rotating polygons
+
+library("raster")#for working with rasters
+
+library("mapview")#for making interactive maps
+
+```
+
+
+```{r}
+
+#function to get rectangle around a point x and rotate it by angle head (in degrees)
+rect_and_rot <- function(x,xsize,ysize, head){
+  bbox <- st_bbox(x)#get the bounding box
+  bbox <- bbox +c(xsize ,ysize,-xsize,-ysize)#make bounding box a rectangle with desired dimensions
+  poly <- st_as_sfc(bbox)#convert bounding box into a polygon
+  poly2 <- rotate.polygon(poly, angle = head + 90, sp = FALSE, anchor = "center")%>% st_set_crs(32611)#use rotate.polygon() to rotate the polygon, not sure why I need to add 90º but I do. Then set the coordinate system to make sure the units are correct
+  return(poly2)#return the rotated rectangular polygon centered on point x
+}
+
+```
+
+
+```{r}
+#read in the data on transect coordinates and approximate headings
+# the .. moves up one file path from the current one; the following code assumes a file structure of "name of github repo"/kelp_connectivity_code/Empirical_data/formatdata, where "name of github repo" also includes the "intermediate_data_output" folder
+kfmtrans <- read.csv("../../../intermediate_data_output/transect_locations/CINP_KFMP_transects.csv")
+
+#rearrange the columns
+kfmtrans <- kfmtrans %>% relocate(Latitude, .after = Site) %>% relocate(Longitude, .after= Latitude) %>% dplyr::select(Site, Latitude, Longitude, Orientation)
+
+#adjust the headings to account for utm coordinates
+kfmtrans2 <- kfmtrans %>% mutate(CA = (-Longitude - 117)*sin(Latitude)) %>% mutate(Orientation2 = Orientation + CA)
+
+
+#transect coords are already at the center of the transect (approximately), convert them to sf object
+tptsk1 <- kfmtrans2 %>% st_as_sf(coords = c("Longitude","Latitude")) %>% st_set_crs(4326)
+
+tptsk1 <- st_transform(tptsk1, 32611)#change the spatial reference system to utm
+
+#add columns with the coordinate values
+tptsk1$utmx <- st_coordinates(tptsk1)[,1]
+tptsk1$utmy <- st_coordinates(tptsk1)[,2]
+
+#turn coordinate points into rectangular transects (transects are about 100m long, benthic monitoring goes 1m on each side)
+kfmtrnspol.list <- mapply(rect_and_rot, tptsk1$geometry, 50, 1, tptsk1$Orientation2)
+
+kfmtrnspol = kfmtrnspol.list[[1]]
+
+for (i in 2:length(kfmtrnspol.list)) {
+  kfmtrnspol <- c(kfmtrnspol, kfmtrnspol.list[[i]])
+}
+
+
+#add back the site.trans id
+Site <- as.data.frame(tptsk1$Site)
+colnames(Site) <- c("Site")
+
+kfmtrnspol2 <- cbind(Site, kfmtrnspol) %>% st_as_sf()%>% st_set_crs(32611)
+
+#plot to check
+#mapview(kfmtrnspol2)+mapview(tptsk1) 
+
+#st_area(kfmtrnspol2$geometry[1])#check that area of each rectangle is 200m2
+
+```
+
+## patch data
+
+These SBC LTER data contain the coordinates of every Landsat pixel within each patch in the southern California giant kelp metapopulation. More information is available at: 
+
+https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.101
+
+```{r}
+
+#download the data on patch coordinates
+#https://portal.edirepository.org/nis/mapbrowse?packageid=knb-lter-sbc.101.2
+
+# Package ID: knb-lter-sbc.101.2 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Spatial definitions of giant kelp (Macrocystis pyrifera) patches in southern and central California.
+# Data set creator:  Kyle C Cavanaugh -  
+# Data set creator:  David A Siegel -  
+# Data set creator:  Peter T Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+patchdef <-read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/101/2/0d416cc00ad948c6befb2a97e9db6414", header=F, skip=1, sep="," , col.names=c("patch_number","pixel_latitude", "pixel_longitude"), check.names=TRUE)
+
+
+```
+
+```{r}
+
+#View(patchdef)#want to rename the lat and long columns and add a pixelid column (each row is a unique Landsat pixel)
+
+patchdef2 <- patchdef %>% rename(latitude = pixel_latitude, longitude = pixel_longitude)%>% mutate(pixid = row_number())#add pixel id number for comparing before and after shift
+
+patchdef2$patch_number <- gsub("socal_", "", patchdef$patch_number) #the patches are labeled as "socal_#" so extract just the number
+
+#now turn this into a spatial object, change the coordinate system to utm, and change the pixel coordinates from the center to the upper left (for rasterizing the points):
+
+#convert the dataframe to sf object
+patchpts <- st_as_sf(patchdef2, coords = c("longitude", "latitude"))
+st_crs(patchpts) <- 4326#set the crs
+
+#convert to utm
+patchpts2 <- st_transform(patchpts, 32611)#change the spatial reference system to utm zone 11
+
+#add columns with the coordinate values
+patchpts2$utmx <- st_coordinates(patchpts2)[,1]
+patchpts2$utmy <- st_coordinates(patchpts2)[,2]
+
+#change the coordinates from the pixel centers to the upper left corners: subtracting from the x and adding to the y to go from center to upper right
+patchpts2$newx <- round(patchpts2$utmx) - 15
+patchpts2$newy <- round(patchpts2$utmy) +15
+
+#Reason for rounding: when converting from degree decimal to utm, the utm coords have a lot of decimal places, and the distances between adjacent points aren't all exactly 30 (some around 29.999). And this caused some points to be lost when turning them into a raster, which requires and evenly spaced grid, so need to round them
+
+#now make a new sf object with the upper left points as the coordinates
+#first make this a data frame
+patchpts2.df <- as.data.frame(patchpts2)#make this a data frame
+
+#remove unnecessary rows and change the coordinates, also change patch_number to patch
+patchpts2.df <- patchpts2.df %>% dplyr::select(patch_number, newx, newy, pixid) %>% relocate(pixid, .before = patch_number) %>% rename(patch = patch_number)
+
+#make this new data frame an sf object using the new coordinates for the point geometries 
+patchpts3 <- patchpts2.df %>% st_as_sf(coords = c("newx", "newy")) %>% st_set_crs(32611)
+
+#add utmx and utmy columns
+patchpts3$utmx <- st_coordinates(patchpts3)[,1]
+patchpts3$utmy <- st_coordinates(patchpts3)[,2]
+ 
+#check that it worked
+#mapview(list(patchpts2[1:500, ],patchpts3[1:500, ]), col.regions=list("red","blue"), col=list("red","blue")) 
+
+```
+
+
+Filter out study region and turn the points into a raster (each point represents a 30 x 30m Landsat pixel)
+
+```{r}
+#Filter out study region (which is approximately bordered by xmin: 168810 ymin: 3703890 xmax: 327120 ymax: 3829740)
+
+patchpts_sub <- patchpts3
+
+patchpts_sub$utmx <- st_coordinates(patchpts_sub)[,1]
+patchpts_sub$utmy <- st_coordinates(patchpts_sub)[,2]
+
+#subset out the study region
+patchpts_sub1 <- patchpts_sub %>% filter(utmx<327120)%>% filter(utmx>168810) %>% filter(utmy>3703890) %>% filter(utmy < 3829740)
+
+patchpts_sub1$patch <- as.numeric(patchpts_sub1$patch)#needed to change patch to numeric for rasterize
+
+
+#make the raster:
+
+#get the max and min values of the raster: the coords are the upper left of each cell. So to get the bottom and right borders, need to add 30m to max lon and subtract 30m from the min lat
+pxmnutm <- min(patchpts_sub1$utmx) 
+pxmxutm <- max(patchpts_sub1$utmx) + 30
+pymnutm <- min(patchpts_sub1$utmy) - 30
+pymxutm <- max(patchpts_sub1$utmy) 
+
+#make the raster with same crs as the data points, no values (empty), resolution of 30m x 30m, and the min and max values specified above
+patch_rst <- raster(crs = crs(patchpts_sub1), vals = 0, resolution = c(30, 30), xmn=pxmnutm, ymn=pymnutm, xmx=pxmxutm, ymx=pymxutm)
+
+#area(patch_rst)#check that the area of the cells is 900m2
+
+#rasterize the points
+patch_rst2 <- rasterize(patchpts_sub1, patch_rst)
+
+#now convert this back to sf object with the cells as polygons
+#https://taromieno.netlify.app/post/raster_to_polygons_2018/
+
+#first convert to sp object (takes a few min)
+patchsp <- as(patch_rst2,'SpatialPolygonsDataFrame')
+
+#check the number of features (polygons) match number of data points
+#patchpts_sub1#112467
+#patchsp #112467
+
+#now convert this to sf object
+patchrstsf <- st_as_sf(patchsp)%>% st_set_crs(32611)
+
+#check that it looks good: plot the polygons and the points
+#mapview(patchrstsf[which(patchrstsf$patch==160), ])+ patchpts_sub1[which(patchpts_sub1$patch==160), ] 
+
+#mapview(patchrstsf[which(patchrstsf$patch==160), ], col.regions=list("red"),col=list("red"))+ mapview(list(patchpts3[which(patchpts3$patch==160), ], patchpts2[which(patchpts2$patch_number==160), ]), col.regions=list("red","blue"),col=list("red","blue")) 
+
+
+```
+
+## overlay 
+
+```{r}
+
+#get all the patch pixels that overlap with/touch each transect (no buffer region)
+patch_kfm <- st_intersects(kfmtrnspol2, patchrstsf)
+
+#turn patch_kfm into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+patch_kfm_match <- as.data.frame(patch_kfm)
+colnames(patch_kfm_match) <- c("kfmid", "pxid")
+
+#check this looks ok
+#mapview(patchrstsf[c(patch_kfm_match$pxid), ]) + mapview(kfmtrnspol2, col.regions=list("red"),col=list("red"))
+
+#add the actual site.trans and pixel ids
+#make the empty vectors
+patch_kfm_match$pixel <- NaN*patch_kfm_match$pxid
+
+patch_kfm_match$patch <- NaN*patch_kfm_match$pxid
+
+patch_kfm_match$Site <- NaN*patch_kfm_match$kfmid
+
+for(i in 1:length(patch_kfm_match$kfmid)){
+  
+  patch_kfm_match$pixel[i] <- patchrstsf$pixid[patch_kfm_match$pxid[i]]
+  
+  patch_kfm_match$patch[i] <- patchrstsf$patch[patch_kfm_match$pxid[i]]
+  
+  patch_kfm_match$Site[i] <- kfmtrnspol2$Site[patch_kfm_match$kfmid[i]]
+  
+}
+
+#remove the index columns
+patch_kfm_match2 <- patch_kfm_match %>% dplyr::select(pixel, patch, Site)
+
+patch_kfm_match3 <- patch_kfm_match2 %>% group_by(Site) %>% summarize(patch = getmode(patch), npix = n())
+
+#View(patch_kfm_match3)
+#mapview(patchrstsf[c(patch_kfm_match$pxid), ]) + mapview(kfmtrnspol2, col.regions=list("red"),col=list("red"))
+
+# filter out the two cases where the transect is just barely touching a single pixel (site 12 in patch 346 (on Anacapa), site 30 in patch 298 (on SCI))
+patch_kfm_match3.2 <- patch_kfm_match3 %>% filter(npix>1)
+
+# export this to intermediate data
+write.csv(patch_kfm_match3.2, "../../../intermediate_data_output/KFMP_transect_pixel_matches/kfm_trans_patch.csv")
+
+```
+
+
+
+
+## swell heights
+
+import the data
+```{r}
+latd <- read.csv("../../../intermediate_data_output/raw_waves/lat.csv", header = F)
+lond <- read.csv("../../../intermediate_data_output/raw_waves/lon.csv", header = F)
+utmxd <- read.csv("../../../intermediate_data_output/raw_waves/utmx.csv", header = F)
+utmyd <- read.csv("../../../intermediate_data_output/raw_waves/utmy.csv", header = F)
+qtrd <- read.csv("../../../intermediate_data_output/raw_waves/qtr.csv", header = F)
+yeard <- read.csv("../../../intermediate_data_output/raw_waves/year.csv", header = F)
+wavesd <- read.csv("../../../intermediate_data_output/raw_waves/waves.csv", header = F)
+
+```
+
+
+```{r}
+# change the column names to the year.quarter: first make the dates data frame with year, quarter, and year.quarter columns
+year.qtrd <- cbind(yeard, qtrd)
+colnames(year.qtrd) <- c("year", "quarter")
+
+year.qtrd2 <- year.qtrd %>% mutate(year.qtr = paste(as.character(year), as.character(quarter), sep = ".")) 
+
+#now make year.qtr the column names for the waves data
+colnames(wavesd) <- year.qtrd2$year.qtr
+
+#now join the lat and lon data to the waves data
+colnames(latd) <- "latitude" 
+colnames(lond) <- "longitude"
+
+colnames(utmxd) <- "utmx" 
+colnames(utmyd) <- "utmy"
+
+wavesd1 <- cbind(wavesd, latd, lond, utmxd, utmyd)
+
+#now convert from wide to long format
+# use gather()
+# http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+# arguments are # data: Data object, key: Name of new key column (made from names of data columns), value: Name of new value column, ...: Names of source columns that contain values, factor_key: if T, treat the new key column as a factor (instead of character vector)
+
+#note this takes a while
+wavesd2 <- gather(wavesd1, year.qtr, waveht, 1:152)%>% left_join(year.qtrd2, by = "year.qtr")
+
+#filter out just years around the study period
+wavesd2 <- wavesd2 %>% filter(year > 1994) %>% filter(year < 2009) 
+#View(wavesd2)
+
+```
+
+
+```{r}
+
+# convert to spatial object to get intersection with transects
+
+#extract the utm coords
+utmcoords <- wavesd2 %>% filter(year.qtr == "1996.1") %>% dplyr::select(utmx, utmy) %>% mutate(pixel = row_number())#make a column with a number to identify each pixel
+
+#View(utmcoords)
+
+#make the utm coords an sf object
+cnpts <- utmcoords %>% st_as_sf(coords = c("utmx","utmy")) %>% st_set_crs(32611)#turn lansat coords into sf object
+
+#check that the crs is the right zone
+#st_crs(cnpts)
+
+#add utmx and utmy columns
+cnpts$utmx <- st_coordinates(cnpts)[,1]
+cnpts$utmy <- st_coordinates(cnpts)[,2]
+
+#mapview(cnpts[1:10,])
+#st_distance(cnpts$geometry[9], cnpts$geometry[10])#check distance is 30m
+
+# remove intermediate datasets to save space
+#rm(latd, lond, utmxd, utmyd, qtrd, yeard, wavesd)
+#rm(year.qtrd, year.qtrd2, wavesd1, wavesd2)
+
+# now get large buffers around each transect
+kfm500 <- st_buffer(tptsk1, dist = 500)
+
+cnpy_kfm500 <- st_intersects(kfm500, cnpts)
+cnpy_kfm500_match <- as.data.frame(cnpy_kfm500)
+colnames(cnpy_kfm500_match) <- c("kfmid", "pxid")
+
+#View(cnpy_kfm500_match)
+
+# export this to intermediate data
+write.csv(cnpy_kfm500_match, "../../../intermediate_data_output/KFMP_transect_pixel_matches/cnpy_kfm500_match.csv")
+
+
+# kfm
+#get all the patch pixels that overlap with/touch each transect (no buffer region)
+cnpy_kfm <- st_intersects(kfmtrnspol2, cnpyrstsf)
+
+#turn cnpy_kfm into a data frame with the pixel ids as the rows and the transects (the site.trans id) as a column
+cnpy_kfm_match <- as.data.frame(cnpy_kfm)
+colnames(cnpy_kfm_match) <- c("kfmid", "pxid")
+
+#check this looks ok
+#mapview(cnpyrstsf[c(cnpy_kfm_match$pxid), ]) + mapview(kfmtrnspol2, col.regions=list("red"),col=list("red"))
+
+#add the actual site.trans and pixel ids
+#make the empty vectors
+cnpy_kfm_match$pixel <- NaN*cnpy_kfm_match$pxid
+
+cnpy_kfm_match$Site <- NaN*cnpy_kfm_match$kfmid
+
+for(i in 1:length(cnpy_kfm_match$kfmid)){
+  
+  cnpy_kfm_match$pixel[i] <- cnpyrstsf$pixel[cnpy_kfm_match$pxid[i]]
+  
+  cnpy_kfm_match$Site[i] <- kfmtrnspol2$Site[cnpy_kfm_match$kfmid[i]]
+  
+}
+
+#remove the index columns
+cnpy_kfm_match2 <- cnpy_kfm_match %>% dplyr::select(pixel, Site)
+
+# export this to intermediate data
+write.csv(cnpy_kfm_match2, "../../../intermediate_data_output/KFMP_transect_pixel_matches/cnpy_kfm_match2.csv")
+
+
+```
+
+
+

@@ -1,0 +1,628 @@
+---
+title: "LTE_detritus"
+author: "Raine Detmer"
+date: "4/6/2023"
+output: html_document
+---
+
+README: code for analyzing SBC LTER's data on detrital abundance within kelp forests 
+
+# packages
+
+```{r}
+library("tidyverse")
+
+library("lme4")
+library("car")
+#library("DHARMa")
+
+library("sjPlot")# for random effects qqplot
+
+library("MuMIn")#for calculating AIC weights
+
+library("gstat") # for variogram plotting
+
+library("sp") # for coordinates function
+
+library("gridExtra") # for exporting AIC table as image
+
+```
+
+# data
+
+## LTE detritus
+
+```{r}
+# Package ID: knb-lter-sbc.25.24 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Reef: Long-term experiment: Kelp removal: Detritus biomass.
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+inUrl1  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/25/24/046cbbef88997fe82e6e7d9d6ad2cee5" 
+infile1 <- tempfile()
+try(download.file(inUrl1,infile1,method="curl"))
+if (is.na(file.size(infile1))) download.file(inUrl1,infile1,method="auto")
+
+                   
+LTE_detritus <-read.csv(infile1,header=F,skip=1,sep="," ,quot='"', col.names=c("YEAR", "MONTH","DATE","SITE","TRANSECT","TREATMENT", "QUAD", "SIDE", "SP_CODE", "WET_WT","AREA","NOTES","SCIENTIFIC_NAME","COMMON_NAME","TAXON_KINGDOM","TAXON_PHYLUM","TAXON_CLASS", "TAXON_ORDER","TAXON_FAMILY","TAXON_GENUS","GROUP","SURVEY","MOBILITY","GROWTH_MORPH"), check.names=TRUE)
+               
+unlink(infile1)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+                
+if (class(LTE_detritus$MONTH)!="factor")LTE_detritus$MONTH<- as.factor(LTE_detritus$MONTH)                                   
+# attempting to convertLTE_detritus$DATE dateTime string to R date structure (date or POSIXct)                                
+tmpDateFormat<-"%Y-%m-%d"
+tmp1DATE<-as.Date(LTE_detritus$DATE,format=tmpDateFormat)
+# Keep the new dates only if they all converted correctly
+if(length(tmp1DATE) == length(tmp1DATE[!is.na(tmp1DATE)])){LTE_detritus$DATE <- tmp1DATE } else {print("Date conversion failed forLTE_detritus$DATE. Please inspect the data and do the date conversion yourself.")}                                                                    
+rm(tmpDateFormat,tmp1DATE) 
+if (class(LTE_detritus$SITE)!="factor")LTE_detritus$SITE<- as.factor(LTE_detritus$SITE)
+if (class(LTE_detritus$TRANSECT)!="factor")LTE_detritus$TRANSECT<- as.factor(LTE_detritus$TRANSECT)
+if (class(LTE_detritus$TREATMENT)!="factor")LTE_detritus$TREATMENT<- as.factor(LTE_detritus$TREATMENT)
+if (class(LTE_detritus$QUAD)!="factor")LTE_detritus$QUAD<- as.factor(LTE_detritus$QUAD)
+if (class(LTE_detritus$SIDE)!="factor")LTE_detritus$SIDE<- as.factor(LTE_detritus$SIDE)
+if (class(LTE_detritus$SP_CODE)!="factor")LTE_detritus$SP_CODE<- as.factor(LTE_detritus$SP_CODE)
+if (class(LTE_detritus$WET_WT)=="factor")LTE_detritus$WET_WT <-as.numeric(levels(LTE_detritus$WET_WT))[as.integer(LTE_detritus$WET_WT) ]               
+if (class(LTE_detritus$WET_WT)=="character")LTE_detritus$WET_WT <-as.numeric(LTE_detritus$WET_WT)
+if (class(LTE_detritus$AREA)=="factor")LTE_detritus$AREA <-as.numeric(levels(LTE_detritus$AREA))[as.integer(LTE_detritus$AREA) ]               
+if (class(LTE_detritus$AREA)=="character")LTE_detritus$AREA <-as.numeric(LTE_detritus$AREA)
+if (class(LTE_detritus$NOTES)!="factor")LTE_detritus$NOTES<- as.factor(LTE_detritus$NOTES)
+if (class(LTE_detritus$SCIENTIFIC_NAME)!="factor")LTE_detritus$SCIENTIFIC_NAME<- as.factor(LTE_detritus$SCIENTIFIC_NAME)
+if (class(LTE_detritus$COMMON_NAME)!="factor")LTE_detritus$COMMON_NAME<- as.factor(LTE_detritus$COMMON_NAME)
+if (class(LTE_detritus$TAXON_KINGDOM)!="factor")LTE_detritus$TAXON_KINGDOM<- as.factor(LTE_detritus$TAXON_KINGDOM)
+if (class(LTE_detritus$TAXON_PHYLUM)!="factor")LTE_detritus$TAXON_PHYLUM<- as.factor(LTE_detritus$TAXON_PHYLUM)
+if (class(LTE_detritus$TAXON_CLASS)!="factor")LTE_detritus$TAXON_CLASS<- as.factor(LTE_detritus$TAXON_CLASS)
+if (class(LTE_detritus$TAXON_ORDER)!="factor")LTE_detritus$TAXON_ORDER<- as.factor(LTE_detritus$TAXON_ORDER)
+if (class(LTE_detritus$TAXON_FAMILY)!="factor")LTE_detritus$TAXON_FAMILY<- as.factor(LTE_detritus$TAXON_FAMILY)
+if (class(LTE_detritus$TAXON_GENUS)!="factor")LTE_detritus$TAXON_GENUS<- as.factor(LTE_detritus$TAXON_GENUS)
+if (class(LTE_detritus$GROUP)!="factor")LTE_detritus$GROUP<- as.factor(LTE_detritus$GROUP)
+if (class(LTE_detritus$SURVEY)!="factor")LTE_detritus$SURVEY<- as.factor(LTE_detritus$SURVEY)
+if (class(LTE_detritus$MOBILITY)!="factor")LTE_detritus$MOBILITY<- as.factor(LTE_detritus$MOBILITY)
+if (class(LTE_detritus$GROWTH_MORPH)!="factor")LTE_detritus$GROWTH_MORPH<- as.factor(LTE_detritus$GROWTH_MORPH)
+                
+# Convert Missing Values to NA for non-dates
+                
+LTE_detritus$WET_WT <- ifelse((trimws(as.character(LTE_detritus$WET_WT))==trimws("-99999")),NA,LTE_detritus$WET_WT)               
+suppressWarnings(LTE_detritus$WET_WT <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_detritus$WET_WT))==as.character(as.numeric("-99999"))),NA,LTE_detritus$WET_WT))
+LTE_detritus$AREA <- ifelse((trimws(as.character(LTE_detritus$AREA))==trimws("-99999")),NA,LTE_detritus$AREA)               
+suppressWarnings(LTE_detritus$AREA <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_detritus$AREA))==as.character(as.numeric("-99999"))),NA,LTE_detritus$AREA))
+LTE_detritus$SCIENTIFIC_NAME <- as.factor(ifelse((trimws(as.character(LTE_detritus$SCIENTIFIC_NAME))==trimws("-99999")),NA,as.character(LTE_detritus$SCIENTIFIC_NAME)))
+
+```
+
+species densities and biomass (including giant kelp and urchins)
+
+```{r}
+# Package ID: knb-lter-sbc.119.8 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Reef: Long-term experiment: biomass of kelp forest species, ongoing since 2008.
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+inUrl1  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/119/8/020f9b0e507561cb49fc8fd122da0a29" 
+infile1 <- tempfile()
+try(download.file(inUrl1,infile1,method="curl"))
+if (is.na(file.size(infile1))) download.file(inUrl1,infile1,method="auto")
+
+                   
+ LTE_bmass <-read.csv(infile1,header=F ,skip=1 ,sep="," ,quot='"', col.names=c("YEAR", "MONTH","DATE","SITE", "TRANSECT","TREATMENT","SP_CODE","PERCENT_COVER", "DENSITY","WM_GM2","DRY_GM2","SFDM", "AFDM", "SCIENTIFIC_NAME","COMMON_NAME","TAXON_KINGDOM","TAXON_PHYLUM","TAXON_CLASS", "TAXON_ORDER", "TAXON_FAMILY","TAXON_GENUS","GROUP", "MOBILITY", "GROWTH_MORPH"), check.names=TRUE)
+               
+unlink(infile1)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+                
+if (class(LTE_bmass$MONTH)!="factor") LTE_bmass$MONTH<- as.factor(LTE_bmass$MONTH)                                   
+# attempting to convert LTE_bmass$DATE dateTime string to R date structure (date or POSIXct)                                
+tmpDateFormat<-"%Y-%m-%d"
+tmp1DATE<-as.Date(LTE_bmass$DATE,format=tmpDateFormat)
+# Keep the new dates only if they all converted correctly
+if(length(tmp1DATE) == length(tmp1DATE[!is.na(tmp1DATE)])){LTE_bmass$DATE <- tmp1DATE } else {print("Date conversion failed for LTE_bmass$DATE. Please inspect the data and do the date conversion yourself.")}                                                                    
+rm(tmpDateFormat,tmp1DATE) 
+if (class(LTE_bmass$SITE)!="factor") LTE_bmass$SITE<- as.factor(LTE_bmass$SITE)
+if (class(LTE_bmass$TRANSECT)!="factor") LTE_bmass$TRANSECT<- as.factor(LTE_bmass$TRANSECT)
+if (class(LTE_bmass$TREATMENT)!="factor") LTE_bmass$TREATMENT<- as.factor(LTE_bmass$TREATMENT)
+if (class(LTE_bmass$SP_CODE)!="factor") LTE_bmass$SP_CODE<- as.factor(LTE_bmass$SP_CODE)
+if (class(LTE_bmass$PERCENT_COVER)=="factor") LTE_bmass$PERCENT_COVER <-as.numeric(levels(LTE_bmass$PERCENT_COVER))[as.integer(LTE_bmass$PERCENT_COVER) ]               
+if (class(LTE_bmass$PERCENT_COVER)=="character") LTE_bmass$PERCENT_COVER <-as.numeric(LTE_bmass$PERCENT_COVER)
+if (class(LTE_bmass$DENSITY)=="factor") LTE_bmass$DENSITY <-as.numeric(levels(LTE_bmass$DENSITY))[as.integer(LTE_bmass$DENSITY) ]               
+if (class(LTE_bmass$DENSITY)=="character") LTE_bmass$DENSITY <-as.numeric(LTE_bmass$DENSITY)
+if (class(LTE_bmass$WM_GM2)=="factor") LTE_bmass$WM_GM2 <-as.numeric(levels(LTE_bmass$WM_GM2))[as.integer(LTE_bmass$WM_GM2) ]               
+if (class(LTE_bmass$WM_GM2)=="character") LTE_bmass$WM_GM2 <-as.numeric(LTE_bmass$WM_GM2)
+if (class(LTE_bmass$DRY_GM2)=="factor") LTE_bmass$DRY_GM2 <-as.numeric(levels(LTE_bmass$DRY_GM2))[as.integer(LTE_bmass$DRY_GM2) ]               
+if (class(LTE_bmass$DRY_GM2)=="character") LTE_bmass$DRY_GM2 <-as.numeric(LTE_bmass$DRY_GM2)
+if (class(LTE_bmass$SFDM)=="factor") LTE_bmass$SFDM <-as.numeric(levels(LTE_bmass$SFDM))[as.integer(LTE_bmass$SFDM) ]               
+if (class(LTE_bmass$SFDM)=="character") LTE_bmass$SFDM <-as.numeric(LTE_bmass$SFDM)
+if (class(LTE_bmass$AFDM)=="factor") LTE_bmass$AFDM <-as.numeric(levels(LTE_bmass$AFDM))[as.integer(LTE_bmass$AFDM) ]               
+if (class(LTE_bmass$AFDM)=="character") LTE_bmass$AFDM <-as.numeric(LTE_bmass$AFDM)
+if (class(LTE_bmass$SCIENTIFIC_NAME)!="factor") LTE_bmass$SCIENTIFIC_NAME<- as.factor(LTE_bmass$SCIENTIFIC_NAME)
+if (class(LTE_bmass$COMMON_NAME)!="factor") LTE_bmass$COMMON_NAME<- as.factor(LTE_bmass$COMMON_NAME)
+if (class(LTE_bmass$TAXON_KINGDOM)!="factor") LTE_bmass$TAXON_KINGDOM<- as.factor(LTE_bmass$TAXON_KINGDOM)
+if (class(LTE_bmass$TAXON_PHYLUM)!="factor") LTE_bmass$TAXON_PHYLUM<- as.factor(LTE_bmass$TAXON_PHYLUM)
+if (class(LTE_bmass$TAXON_CLASS)!="factor") LTE_bmass$TAXON_CLASS<- as.factor(LTE_bmass$TAXON_CLASS)
+if (class(LTE_bmass$TAXON_ORDER)!="factor") LTE_bmass$TAXON_ORDER<- as.factor(LTE_bmass$TAXON_ORDER)
+if (class(LTE_bmass$TAXON_FAMILY)!="factor") LTE_bmass$TAXON_FAMILY<- as.factor(LTE_bmass$TAXON_FAMILY)
+if (class(LTE_bmass$TAXON_GENUS)!="factor") LTE_bmass$TAXON_GENUS<- as.factor(LTE_bmass$TAXON_GENUS)
+if (class(LTE_bmass$GROUP)!="factor") LTE_bmass$GROUP<- as.factor(LTE_bmass$GROUP)
+if (class(LTE_bmass$MOBILITY)!="factor") LTE_bmass$MOBILITY<- as.factor(LTE_bmass$MOBILITY)
+if (class(LTE_bmass$GROWTH_MORPH)!="factor") LTE_bmass$GROWTH_MORPH<- as.factor(LTE_bmass$GROWTH_MORPH)
+                
+# Convert Missing Values to NA for non-dates
+                
+LTE_bmass$PERCENT_COVER <- ifelse((trimws(as.character(LTE_bmass$PERCENT_COVER))==trimws("-99999")),NA,LTE_bmass$PERCENT_COVER)               
+suppressWarnings(LTE_bmass$PERCENT_COVER <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$PERCENT_COVER))==as.character(as.numeric("-99999"))),NA,LTE_bmass$PERCENT_COVER))
+LTE_bmass$DENSITY <- ifelse((trimws(as.character(LTE_bmass$DENSITY))==trimws("-99999")),NA,LTE_bmass$DENSITY)               
+suppressWarnings(LTE_bmass$DENSITY <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$DENSITY))==as.character(as.numeric("-99999"))),NA,LTE_bmass$DENSITY))
+LTE_bmass$WM_GM2 <- ifelse((trimws(as.character(LTE_bmass$WM_GM2))==trimws("-99999")),NA,LTE_bmass$WM_GM2)               
+suppressWarnings(LTE_bmass$WM_GM2 <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$WM_GM2))==as.character(as.numeric("-99999"))),NA,LTE_bmass$WM_GM2))
+LTE_bmass$DRY_GM2 <- ifelse((trimws(as.character(LTE_bmass$DRY_GM2))==trimws("-99999")),NA,LTE_bmass$DRY_GM2)               
+suppressWarnings(LTE_bmass$DRY_GM2 <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$DRY_GM2))==as.character(as.numeric("-99999"))),NA,LTE_bmass$DRY_GM2))
+LTE_bmass$SFDM <- ifelse((trimws(as.character(LTE_bmass$SFDM))==trimws("-99999")),NA,LTE_bmass$SFDM)               
+suppressWarnings(LTE_bmass$SFDM <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$SFDM))==as.character(as.numeric("-99999"))),NA,LTE_bmass$SFDM))
+LTE_bmass$AFDM <- ifelse((trimws(as.character(LTE_bmass$AFDM))==trimws("-99999")),NA,LTE_bmass$AFDM)               
+suppressWarnings(LTE_bmass$AFDM <- ifelse(!is.na(as.numeric("-99999")) & (trimws(as.character(LTE_bmass$AFDM))==as.character(as.numeric("-99999"))),NA,LTE_bmass$AFDM))
+LTE_bmass$SCIENTIFIC_NAME <- as.factor(ifelse((trimws(as.character(LTE_bmass$SCIENTIFIC_NAME))==trimws("-99999")),NA,as.character(LTE_bmass$SCIENTIFIC_NAME)))
+
+
+```
+
+
+# format
+
+```{r}
+# detritus
+# filter out MAPY (giant kelp) only
+kelp_detritus <- LTE_detritus %>% filter(SP_CODE=="MAPY") %>% dplyr::select(YEAR, MONTH, DATE, SITE, TRANSECT, TREATMENT, QUAD, SIDE, SP_CODE, WET_WT, AREA, SCIENTIFIC_NAME, COMMON_NAME)
+
+# use factor() to drop factor levels in the full data but not in the subsetted data (see https://www.edureka.co/community/1593/how-to-drop-factor-levels-in-a-subsetted-data-frame)
+kelp_detritus[] <- lapply(kelp_detritus, function(x) if(is.factor(x)) factor(x) else x)
+
+
+kelp_detritus2 <- kelp_detritus%>% rename_all(tolower) %>% filter(is.na(wet_wt)==F) %>% group_by(year, month, date, site, transect, treatment) %>% summarize(detritus = sum(wet_wt), area = sum(area), detritus_m2 = detritus/area)
+
+#View(kelp_detritus2)
+
+# urchin densties
+urchins <- LTE_bmass %>% filter(SCIENTIFIC_NAME %in% c("Strongylocentrotus purpuratus", "Mesocentrotus franciscanus")) %>% filter(TREATMENT !="CONTINUAL") %>% group_by(YEAR, MONTH, SITE, TRANSECT, TREATMENT) %>% summarize(DENSITY = sum(DENSITY, na.rm = T)) %>% rename_all(tolower) %>% rename(urch_dens = density) 
+
+# giant kelp biomass
+kmass <- LTE_bmass %>% filter(SCIENTIFIC_NAME=="Macrocystis pyrifera") %>% dplyr::select(YEAR, MONTH, DATE, SITE, TRANSECT, TREATMENT, SP_CODE, DENSITY, WM_GM2, SCIENTIFIC_NAME, COMMON_NAME) 
+kmass[] <- lapply(kmass, function(x) if(is.factor(x)) factor(x) else x)
+
+# rename the variables, filter out the continual treatment, and get the regional mean biomass from across all the control transects
+kmass2 <- kmass %>% rename_all(tolower) %>% dplyr::select(-date, -sp_code, -scientific_name, -common_name) %>% rename(frond_dens = density, kelp_gm2 = wm_gm2) %>% filter(treatment !="CONTINUAL") 
+
+View(kmass2)
+
+# combine and filter out data available at the time of this study (this is an ongoing dataset)
+lte <- left_join(kelp_detritus2, urchins, by = c("year", "month", "site", "transect", "treatment")) %>% left_join(kmass2, by = c("year", "month", "site", "transect", "treatment")) %>% mutate(site.trans = paste(site, transect, sep = "."), year.month = paste(year, month, sep = "."))
+max(lte$year.month)
+
+lte <- lte %>% filter(year.month <= "2022.2")
+
+```
+
+
+prep for LMM model fitting
+
+use the annual transects as the focal transects, since we know local kelp was removed there. Then see if a model with local kelp and detrital biomass in the control transect does better than a model with just local biomass
+
+
+```{r}
+# to stay consistent, filter out just the months closest to the dates sampled over most of the data set:  mid-February, mid-May, mid-August, and mid-November
+# for each transect survey in each month, label which survey it was in a year (1st, 2nd, etc.). Can then group by these sampling clusters, calculate mean difference from the mode date, and select the sample cluster with the minumum difference for each quarter
+# so for each year, get all the observations for each transect, and label which one they were (e.g., first observation would be the one in Jan, 2nd in March, etc.)
+# do this separately for the annual and control transects, then add the detritus in the control transects as another column to the annual data
+
+lte_modA <- lte %>% mutate(date_mode = if_else(month %in% c(1, 2, 3), paste(year, "02-15", sep = "-"), if_else(month %in% c(4, 5, 6),  paste(year, "05-15", sep = "-"), if_else(month %in% c(7, 8, 9),  paste(year, "08-15", sep = "-"),  paste(year, "11-15", sep = "-"))))) %>% mutate(date_mode = as.Date(date_mode)) %>% mutate(date_diff = abs(date - date_mode)) %>% group_by(year, site, transect, site.trans, treatment) %>% mutate(survey_num = rank(month)) %>% ungroup() %>% group_by(year, survey_num) %>% mutate(mean_diff = mean(date_diff)) %>% ungroup() %>% group_by(year, date_mode) %>% mutate(min_mean = min(mean_diff)) %>% ungroup() %>% filter(mean_diff == min_mean)%>% mutate(qtr = if_else(month %in% c(1, 2, 3), 1, if_else(month %in% c(4, 5, 6), 2, if_else(month %in% c(7, 8, 9), 3, 4))))%>% filter(treatment == "ANNUAL")
+
+lte_modA %>% group_by(year, date_mode) %>% summarize(n_samples = n()) # all should have 4 before IV was added, then have 5
+
+lte %>% filter(year==2017 & treatment=="ANNUAL") %>% group_by(site.trans) %>% summarise(n_obs = n()) # Naples annual removal site was only surveyed 3 times in 2017 (nothing in Nov)
+
+#kmass2 %>% filter(year==2017 & treatment=="ANNUAL") # was surveyed in the biomass data
+
+#head(kelp_detritus)
+#kelp_detritus %>% filter(YEAR==2017 & TREATMENT=="ANNUAL" & SITE=="NAPL") # all NA values in Nov 
+
+# repeat for control transects
+lte_modC <- lte %>% mutate(date_mode = if_else(month %in% c(1, 2, 3), paste(year, "02-15", sep = "-"), if_else(month %in% c(4, 5, 6),  paste(year, "05-15", sep = "-"), if_else(month %in% c(7, 8, 9),  paste(year, "08-15", sep = "-"),  paste(year, "11-15", sep = "-"))))) %>% mutate(date_mode = as.Date(date_mode)) %>% mutate(date_diff = abs(date - date_mode)) %>% group_by(year, site, transect, site.trans, treatment) %>% mutate(survey_num = rank(month)) %>% ungroup() %>% group_by(year, survey_num) %>% mutate(mean_diff = mean(date_diff)) %>% ungroup() %>% group_by(year, date_mode) %>% mutate(min_mean = min(mean_diff)) %>% ungroup() %>% filter(mean_diff == min_mean)%>% mutate(qtr = if_else(month %in% c(1, 2, 3), 1, if_else(month %in% c(4, 5, 6), 2, if_else(month %in% c(7, 8, 9), 3, 4))))%>% filter(treatment == "CONTROL") %>% rename(detritus_m2C = detritus_m2, kelp_gm2C = kelp_gm2, urch_densC = urch_dens) %>% dplyr::select(year, month, site, detritus_m2C, kelp_gm2C, urch_densC)
+
+# join together
+lte_mod <- left_join(lte_modA, lte_modC, by = c("year", "month", "site"))
+
+lte_mod2 <- lte_mod %>% mutate(yearqtr = as.factor(paste(year, qtr, sep = "."))) %>% rename(sitetrans = site.trans, local_kelp = kelp_gm2, control_detritus = detritus_m2C) %>% mutate(sitetrans = as.factor(sitetrans)) %>% filter(is.na(local_kelp)==F) %>% mutate(Llocal_kelp = log(local_kelp+1), Lurch_dens = log(urch_dens+1), Lcontrol_detritus = log(control_detritus+1)) %>% mutate(Ldetritus_m2 = log(detritus_m2+1))
+
+
+# now standardize the predictor variables
+
+#make function to standardize all predictors
+stand.fun <- function(x){
+  stand.x <- (x - mean(x, na.rm = T)) / sd(x, na.rm = T)
+  
+  return(stand.x)
+}
+
+lte_mod2$SLlocal_kelp <- stand.fun(lte_mod2$Llocal_kelp)
+
+lte_mod2$SLcontrol_detritus <- stand.fun(lte_mod2$Lcontrol_detritus)
+
+lte_mod2$SLurch_dens <- stand.fun(lte_mod2$Lurch_dens)
+
+#View(lte_mod2)
+
+```
+
+# LMM fitting
+
+random effects
+
+```{r}
+# no urchins
+#modre <- lmer(Ldetritus_m2 ~ SLlocal_kelp + SLcontrol_detritus  + (1|sitetrans) + (1|yearqtr), data=lte_mod2)
+
+# with urchins
+modre <- lmer(Ldetritus_m2 ~ SLlocal_kelp + SLcontrol_detritus +SLurch_dens  + (1|sitetrans) + (1|yearqtr), data=lte_mod2)
+
+
+summary(modre)
+
+```
+
+
+fixed effects
+
+```{r}
+mod0 <- lmer(Ldetritus_m2 ~ (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modB <- lmer(Ldetritus_m2 ~ SLlocal_kelp  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modD <- lmer(Ldetritus_m2 ~ SLcontrol_detritus  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modBD <- lmer(Ldetritus_m2 ~ SLlocal_kelp  + SLcontrol_detritus  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modU <- lmer(Ldetritus_m2 ~ SLurch_dens  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modUD <- lmer(Ldetritus_m2 ~ SLcontrol_detritus + SLurch_dens  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modUB <- lmer(Ldetritus_m2 ~ SLlocal_kelp + SLurch_dens  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+modUBD <- lmer(Ldetritus_m2 ~ SLlocal_kelp  + SLcontrol_detritus + SLurch_dens  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = FALSE)
+
+```
+
+
+
+```{r}
+#get AICs and weights (see Zuur page 483, also Castorani papers)
+
+#make function to get the deltas
+deltaAIC.fun <- function(AICs, AIC.min){
+  
+  deltas <- AICs - AIC.min
+  
+  return(deltas)
+  
+}
+
+
+# no urchins
+#mod_AICs <- AIC(mod0,modB, modD, modBD)
+
+# with urchins
+mod_AICs <- AIC(mod0,modB, modD, modU, modBD, modUD, modUB, modUBD)
+
+#get the delta AIC values
+mod_deltas <- deltaAIC.fun(mod_AICs[, 2], min(mod_AICs[, 2]))
+
+#get the weights
+mod_weights <- as.vector(round(Weights(mod_AICs[, 2]), 3))
+
+
+# add the delta AICs and weights to the AIC dataframe
+mod_AICs$delta <- mod_deltas
+mod_AICs$weights <- mod_weights
+
+mod_AICs <- mod_AICs[order(mod_AICs$AIC), ] 
+
+mod_AICs
+
+#write.table(mod_AICs, file = "AICvals.txt", sep = ",", quote = FALSE)
+rownames(mod_AICs)
+
+# rename the rows
+mod_AICs2 <- mod_AICs
+rownames(mod_AICs2) <- NULL
+rownames(mod_AICs2) <- c("BD", "BDU", "D", "DU", "B", "BU", "0", "U")
+
+
+# round for displaying the table
+mod_AICs2 <- mod_AICs2 %>% mutate(AIC = round(AIC, 1), delta = round(delta, 1), weights = round(weights, 1))
+
+pdf("AICLMMtable.pdf")#, height = 50*nrow(mod_AICs2), width = 200*ncol(mod_AICs2)
+grid.table(mod_AICs2,theme = ttheme_minimal(core = list(bg_params=list(fill=rep(NA,11), col="black")))) # ingridExtra package
+dev.off()
+
+```
+
+now refit the best-fitting models with REML = TRUE
+
+```{r}
+
+modBD2 <- lmer(Ldetritus_m2 ~ SLlocal_kelp  + SLcontrol_detritus  + (1|sitetrans) + (1|yearqtr), data=lte_mod2, REML = TRUE)
+
+summary(modBD2)
+
+# NOTE: fitting the model without log transformed detritus resulted in highly skewed residuals
+
+```
+
+
+
+## validation
+
+### vifs
+
+```{r}
+
+vif(modBD2) # vifs are low
+
+vif(modUBD)# vifs are low with urchins
+
+```
+
+### residuals
+
+from Castorani 2018: We checked for homogeneity of variance by plotting normalized model residuals against model predictions and individual predictors. We specified heterogeneous covariance structures where necessary to meet the assumptions of homoscedasticity (Pinheiro and Bates 2000, Zuur et al. 2009, 2010). 
+
+We ensured normality of residuals using histograms and quantile-quantile plots. To meet this assumption, living and detrital giant kelp were log transformed (ln[x + 1]) for models of biomass. 
+
+Zuur 2.6.3.1
+Standard model validation graphs are (i) residuals versus fitted values to verify homogeneity, (ii) a QQ-plot or histogram of the residuals for normality, and (iii) residuals versus each explanatory variable to check independence, see Fig. 2.7. Also need to check whether there are any influential observations. 
+
+good to use standardized residuals
+
+```{r}
+
+# distribution of residuals
+# histogram
+hist(residuals(modBD2, type = "pearson"), main = "histogram of model residuals", xlab = "residuals")
+
+# qqplot
+qqPlot(residuals(modBD2))# from car package
+
+
+#can also use plot_model from the sjPlot package with ype = "diag"
+#plot_model(modBD2, type = "diag")[[1]] #qqplot
+#plot_model(modBD2, type = "diag")[[3]] # histogram of residuals
+
+# residuals vs. fitted values
+plot(x = fitted(modBD2), y = residuals(modBD2, type = "pearson"), xlab = "fitted values", ylab = "residuals")
+lines(lowess(x = fitted(modBD2), y = residuals(modBD2, type = "pearson")), col = "red")# not sure if there is bad violation of independence... looks kind of like fig 5.6 on pg 134 of Zuur 2009, and they said that model was ok...
+
+# look at residuals vs. predictors
+plot(x = lte_mod2$Llocal_kelp, y = residuals(modBD2, type = "pearson"), xlab = "log(local biomass)", ylab = "residuals")
+lines(lowess(x = lte_mod2$Llocal_kelp, y = residuals(modBD2, type = "pearson")), col = "red")
+
+plot(x = lte_mod2$Lcontrol_detritus, y = residuals(modBD2, type = "pearson"), xlab = "log(control detritus)", ylab = "residuals")
+lines(lowess(x = lte_mod2$Lcontrol_detritus, y = residuals(modBD2, type = "pearson")), col = "red")
+
+
+
+
+
+#DHARMa
+#modLR2_simres <- simulateResiduals(modLR2)
+#plot(modLR2_simres)
+# note DHARMa is excluding RE estimates in the predictions when plotting res ~ pred. See here: https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html#general-remarks-on-interperting-residual-patterns-and-tests
+
+#modBD2_simres <- simulateResiduals(modBD2)
+#plot(modBD2_simres)
+
+```
+
+
+
+
+### rand eff distribution
+
+
+```{r}
+#uses sjPlot package
+#type = "diag": For mixed models, returns the QQ-plot for random effects (number 2 of the plots)
+plot_model(modBD2, type = "diag")[[2]] # first is yearqtr, second is sitetrans
+
+```
+
+
+### autocorrelation
+
+
+temporal
+
+```{r}
+#need to get the acf values for the residuals as a vector for each transect, then put all these together, then get the mean for each lag, and for each transect get the number of ACF values > than the CIs
+
+#length(unique(lte_mod2$yearqtr))
+
+transect_ids <- as.vector(unique(lte_mod2$sitetrans))#all the transect_ids
+#empty matrices for the acf and pacf values
+modBD2_resid_acf <- matrix(NA, 56, length(transect_ids))# have 55 yearqtrs
+modBD2_resid_pacf <- matrix(NA, 55, length(transect_ids))#pacf is one less than acf
+
+#transect_ids
+
+
+#empty vectors for number of acf and pacf values outside of confidence intervals
+modBD2_sig_res_acf <- rep(NA, length(transect_ids))
+modBD2_sig_res_pacf <- rep(NA, length(transect_ids))
+
+for(i in 1:length(transect_ids)){#for each transect
+  temp_data1 <- resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[i])]#subset out the ith transect
+  temp_data2 <- temp_data1[order(lte_mod2[which(lte_mod2$sitetrans==transect_ids[i]), ]$yearqtr)] #order the observations by yearqtr
+  
+  n_obs <- length(temp_data2)#number of years transect was monitored
+  
+  #get the acf and pacf values
+  modBD2_resid_acf[1:n_obs, i] <- as.vector(acf(temp_data2, plot=F, lag = n_obs)$acf) # needed to add lag = n_obs otherwise was getting an error
+  
+  modBD2_resid_pacf[1:(n_obs-1), i] <- as.vector(pacf(temp_data2, plot=F, lag = n_obs-1)$acf)
+  
+  #get the number that are outside confidence intervals
+  modBD2_sig_res_acf[i] <- length(which(abs(modBD2_resid_acf[ ,i]) > qnorm((1 + 0.95)/2)/sqrt(n_obs)))
+  
+  modBD2_sig_res_pacf[i] <- length(which(abs(modBD2_resid_pacf[ ,i]) > qnorm((1 + 0.95)/2)/sqrt(n_obs)))
+  
+}
+
+#as.vector(acf(temp_data2, plot=F)$acf)
+
+#lte_mod2 %>% group_by(sitetrans, yearqtr) %>% summarize(n_obs = n()) %>% filter(n_obs !=1)
+
+
+which(modBD2_sig_res_acf>1)
+
+modBD2_sig_res_acf
+
+
+which(modBD2_sig_res_pacf>1) # no pacfs are significant
+
+# plot the acfs for each
+transect_ids
+
+acf(resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[1])], plot=T, main = "ACF for AQUE.7")
+acf(resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[2])], plot=T, main = "ACF for CARP.9")
+acf(resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[3])], plot=T, main = "ACF for MOHK.3")
+acf(resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[4])], plot=T, main = "ACF for NAPL.9")
+acf(resid(modBD2, type = "pearson")[which(lte_mod2$sitetrans==transect_ids[5])], plot=T, main = "ACF for IVEE.4")
+
+# it seems like any significant lags are maybe just due to chance? None are at lag 1
+
+#plot the mean acfs
+barplot(apply(modBD2_resid_acf, 1, function(x) mean(x, na.rm=T)), ylim = c(-0.4, 1), xlab="Time lag (quarters)", ylab="mean ACF", main="Temporal autocorrelation plot for residuals")
+abline(h=0)
+#axis(side=1, at=c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), labels=c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),las=0, cex.axis=1)
+
+
+
+```
+
+spatial: assume the sites are spatially independent
+
+get the transect coordinates (available in the transect topography data)
+
+```{r}
+# Package ID: knb-lter-sbc.44.9 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: Long-term experiment: Kelp Removal: Transect depth data .
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+coords <- read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/44/9/b33eb7e93b097b92adc48bd802451fb4", header = T)
+
+#View(coords)
+
+
+```
+
+
+
+
+try variogram
+```{r}
+
+# try a variogram: Zuur 2009 section 7.2, starting on page 162
+
+#library("gstat")
+
+#library("sp") # for coordinates function
+
+View(coords)
+
+coords2 <- coords %>% mutate(sitetrans = as.factor(paste(SITE, TRANSECT, sep = "."))) %>% filter(sitetrans %in% lte_mod2$sitetrans) %>% dplyr::select(sitetrans, LATITUDE, LONGITUDE)
+
+View(coords2)
+
+#get data frame with just the locations (lat, lon), observation (kelp status), and year and use spread to make each year its own column
+#first need to add the transect lat and long and model residuals to the data frame
+head(lte_mod2) # col 13 = site.trans, col 24 = yearqtr
+lte_mod2_res <- left_join(lte_mod2[,c(13,24)], coords2, by = "sitetrans") #%>% dplyr::select(Latitude, Longitude, year)
+lte_mod2_res$BD2r <- residuals(modBD2, type = "pearson")
+
+#View(lte_mod2_res)
+
+spatialdata <- lte_mod2_res[, 3:5] # just the coords and residuals
+coordinates(spatialdata) <- c("LONGITUDE","LATITUDE") # x, y
+
+var1 <- variogram(BD2r~1, spatialdata) 
+
+plot(var1, pch = 16, cex = 1.5) # I think this shows no spatial correlation
+
+# re: units of distance: https://stackoverflow.com/questions/10769884/what-are-the-units-of-distance-in-gstat-variogram
+
+# "data are unprojected so should be unprojected great circle distances in km"
+
+# check different directions don't matter
+#var2 <- variogram(BD2r~1, spatialdata, alpha = c(0, 45, 90, 135))
+
+#plot(var2)
+
+# try a bubble plot
+bubble(spatialdata, "BD2r", col = c("black","grey"), main = "Residuals", xlab = "X-coordinates", ylab = "Y-coordinates")
+
+```
+
+## significance
+
+```{r}
+
+Anova(modBD2)
+
+Anova(modUBD2)
+
+```
+
+## visualization
+
+
+
+```{r}
+
+#can use sjPlot package
+#type = "diag": For mixed models, returns the QQ-plot for random effects (number 2 of the plots)
+#plot_model(modBD2) # first is yearqtr, second is sitetrans
+
+modBD2CIs <- confint.merMod(modBD2) # should check on best way to calculate these
+
+#modBD2CIs
+
+# lower
+#modBD2CIs[5] # local biomass
+#modBD2CIs[6] # neighbor drift
+
+# upper
+#modBD2CIs[11] # local biomass
+#modBD2CIs[12] # neighbor drift
+
+#fixef(modBD2)[2]
+#fixef(modBD2)[3]
+
+pdf("LMMresults.pdf", width = 5, height = 4)
+plot(x = fixef(modBD2)[2], y = 1, type = "p", pch = 16, xlim = c(0, 1), ylim = c(0, 1.2), xlab = "Value of coefficient", yaxt = "n", ylab = NA)
+points(x = fixef(modBD2)[3], y = 0.4, type = "p", pch = 16)
+segments(modBD2CIs[5], 1, modBD2CIs[11], 1)
+segments(modBD2CIs[6], 0.4, modBD2CIs[12], 0.4)
+axis(side = 2, at = c(0.4, 1), labels = c("control \ndetritus", "local \nbiomass"), las = 1)
+abline(v = 0, lty = 2)
+mtext(side = 3, "LMM fixed effects") #adj = 0
+dev.off()
+
+```
+

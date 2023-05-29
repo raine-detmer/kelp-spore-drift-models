@@ -1,0 +1,1611 @@
+---
+title: "ODE_GLMM_comparison"
+author: "Raine Detmer"
+date: "4/6/2023"
+output: html_document
+---
+
+README: all the ODE simulations to compare to the GLMM predictions (Fig. 6, Fig. S20, Fig. S23)
+
+# packages
+
+```{r}
+library("tidyverse")
+
+library("lubridate")
+
+library("deSolve")
+
+library("tictoc")
+
+```
+
+# data
+
+Import/format the kelp metapopulation data 
+```{r}
+
+# dispersal times between metapopulation patches
+
+# Package ID: knb-lter-sbc.103.3 Cataloging System:https://pasta.lternet.edu.
+# Data set title: Kelp metapopulations: Semi-annual time series of spore dispersal times among giant kelp patches in southern California, 1996 - 2006.
+# Data set title: Kelp metapopulations: Semi-annual time series of spore dispersal times among giant kelp patches in southern California, 1996 - 2006.
+# Data set creator:  Max Castorani -  
+# Data set creator:  David Siegel -  
+# Data set creator:  Rachel Simons -  
+# Data set creator:  Daniel Reed -  
+# Data set creator:  Peter Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+connUrl  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/103/3/8f8d23290f81ecf6e10d0fb53c905a4e" 
+connFile <- tempfile()
+try(download.file(connUrl,connFile,method="curl"))
+if (is.na(file.size(connFile))) download.file(connUrl,connFile,method="auto")
+
+#name the data fram "patch_conn"             
+ patch_conn <-read.csv(connFile,header=F,skip=1,sep=",",quot='"', col.names=c("source_patch","destination_patch","year","semester","time"), check.names=TRUE)
+               
+unlink(connFile)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+if (class(patch_conn$source_patch)!="factor") patch_conn$source_patch<- as.factor(patch_conn$source_patch)
+if (class(patch_conn$destination_patch)!="factor") patch_conn$destination_patch<- as.factor(patch_conn$destination_patch)
+if (class(patch_conn$semester)!="factor") patch_conn$semester<- as.factor(patch_conn$semester)
+if (class(patch_conn$time)=="factor") patch_conn$time <-as.numeric(levels(patch_conn$time))[as.integer(patch_conn$time) ]               
+if (class(patch_conn$time)=="character") patch_conn$time <-as.numeric(patch_conn$time)
+
+# area and biomass of each patch
+
+# Package ID: knb-lter-sbc.102.1 Cataloging System:https://pasta.lternet.edu.
+# Data set title: Kelp metapopulations: Semi-annual time series of giant kelp patch area, biomass and fecundity in southern California, 1996 - 2006.
+# Data set creator:  Max Castorani -  
+# Data set creator:  Daniel Reed -  
+# Data set creator:  Peter Raimondi -  
+# Data set creator:  Filipe Alberto -  
+# Data set creator:  Tom Bell -  
+# Data set creator:  Kyle Cavanaugh -  
+# Data set creator:  David Siegel -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+# Metadata Link: https://portal.lternet.edu/nis/metadataviewer?packageid=knb-lter-sbc.102.1
+
+patchUrl  <- "https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/102/1/fdeb932980156bbc1dd56622619dc2dd" 
+patchFile <- tempfile()
+try(download.file(patchUrl,patchFile,method="curl"))
+if (is.na(file.size(patchFile))) download.file(patchUrl,patchFile,method="auto")
+                   
+ patch_stats <-read.csv(patchFile,header=F,skip=1,sep=",",quot='"', col.names=c("patch_number", "pixel_latitude", "pixel_longitude","patch_area","year", "semester", "patch_biomass","patch_fecundity"), check.names=TRUE)
+               
+unlink(patchFile)
+		    
+# Fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+if (class(patch_stats$patch_number)!="factor") patch_stats$patch_number<- as.factor(patch_stats$patch_number)
+if (class(patch_stats$pixel_latitude)=="factor") patch_stats$pixel_latitude <-as.numeric(levels(patch_stats$pixel_latitude))[as.integer(patch_stats$pixel_latitude) ]               
+if (class(patch_stats$pixel_latitude)=="character") patch_stats$pixel_latitude <-as.numeric(patch_stats$pixel_latitude)
+if (class(patch_stats$pixel_longitude)=="factor") patch_stats$pixel_longitude <-as.numeric(levels(patch_stats$pixel_longitude))[as.integer(patch_stats$pixel_longitude) ]               
+if (class(patch_stats$pixel_longitude)=="character") patch_stats$pixel_longitude <-as.numeric(patch_stats$pixel_longitude)
+if (class(patch_stats$patch_area)=="factor") patch_stats$patch_area <-as.numeric(levels(patch_stats$patch_area))[as.integer(patch_stats$patch_area) ]               
+if (class(patch_stats$patch_area)=="character") patch_stats$patch_area <-as.numeric(patch_stats$patch_area)
+if (class(patch_stats$semester)!="factor") patch_stats$semester<- as.factor(patch_stats$semester)
+if (class(patch_stats$patch_biomass)=="factor") patch_stats$patch_biomass <-as.numeric(levels(patch_stats$patch_biomass))[as.integer(patch_stats$patch_biomass) ]               
+if (class(patch_stats$patch_biomass)=="character") patch_stats$patch_biomass <-as.numeric(patch_stats$patch_biomass)
+if (class(patch_stats$patch_fecundity)=="factor") patch_stats$patch_fecundity <-as.numeric(levels(patch_stats$patch_fecundity))[as.integer(patch_stats$patch_fecundity) ]               
+if (class(patch_stats$patch_fecundity)=="character") patch_stats$patch_fecundity <-as.numeric(patch_stats$patch_fecundity)
+
+
+# rename the patches source patches, also convert biomass from mT to kg
+source_patches <- patch_stats %>% select(-pixel_latitude, -pixel_longitude, -patch_fecundity) %>% rename(source_patch = patch_number, source_biomass = patch_biomass, source_area= patch_area) %>% mutate(source_biomass = 1000*source_biomass)
+
+# destination (focal) patch data
+#destination_patches <- patch_stats %>% select(-pixel_latitude, -pixel_longitude, -patch_fecundity) %>% rename(patch = patch_number) %>% mutate(patch_biomass = 1000*patch_biomass)
+
+```
+
+
+
+import the data sets used to fit the GLMM (these were formatted in "format_data.Rmd")
+
+```{r}
+# benthic transect data
+benthicdt <- read.csv("../../../intermediate_data_output/GLMM_data/benthic_data.csv") %>% dplyr::select(-X)
+
+# metapopulation patch data
+patchdt <- read.csv("../../../intermediate_data_output/GLMM_data/patch_data.csv") %>% dplyr::select(-X)
+
+# convert patch connectivity to 1 semester lag
+patchdt1Sfull <- patchdt %>% group_by(patch) %>% mutate_at(c(colnames(patchdt[4:9])), list(~ lag(.,n=1L, default = NA, order_by = year.sem))) %>% ungroup()
+
+# join the benthic transect and patch connectivity data
+full_datalvals <-left_join(benthicdt, patchdt1Sfull, by = c("year", "semester", "year.sem","patch")) %>% filter(is.na(patch_area)==F) %>% mutate(patch = as.factor(patch), transect_id = as.factor(transect_id))%>% filter(is.na(patch_conn0.9)==F, is.na(kelp_dens)==F)
+
+# get the value of patch area to use in calculating epsilon_s and epsilon_d for the ODE
+area.val <- exp(mean(log(full_datalvals$patch_area)))*10000 # take the mean of the log-transformed patch areas, convert it back to raw scale, and covert from hectares to m2
+
+```
+
+Import SBC LTER data used to inform the distributions of intermediate parameters used to calculate external spore and drift inputs (for more details on these data see https://sbclter.msi.ucsb.edu/data/catalog/package/?package=knb-lter-sbc.112)
+
+```{r}
+
+# Package ID: knb-lter-sbc.112.5 Cataloging System:https://pasta.edirepository.org.
+# Data set title: SBC LTER: REEF:  Net primary production, growth and standing crop of Macrocystis pyrifera in Southern California.
+# Data set creator:    - Santa Barbara Coastal LTER 
+# Data set creator:  Andrew A Rassweiler -  
+# Data set creator:  Shannon Harrer -  
+# Data set creator:  Daniel C Reed -  
+# Data set creator:  Clint J Nelson -  
+# Data set creator:  Robert J Miller -  
+# Contact:    - Information Manager, Santa Barbara Coastal LTER   - sbclter@msi.ucsb.edu
+# Stylesheet v2.11 for metadata conversion into program: John H. Porter, Univ. Virginia, jporter@virginia.edu 
+
+ kelp_dem <-read.csv("https://pasta.lternet.edu/package/data/eml/knb-lter-sbc/112/5/62685a4fb61873c1843433a3364fd08a" ,header=F,skip=1,sep="," ,quot='"', col.names=c("Site", "Date","FSC_dry", "FSC_carbon", "FSC_nitrogen", "FSC_fraction_canopy", "Frond.density", "Plant_density", "Surface_Irradiance", "Bottom_Irradiance", "Subsurface_Irradiance", "Plant_loss_rate", "Frond_loss_rate", "Cut_frond_loss_rate", "Blade_loss_rate", "Dissolved_loss_rate", "Carbon_lost_as_plants", "Carbon_lost_as_fronds", "Carbon_lost_as_cut_fronds", "Carbon_lost_as_blades", "Carbon_lost_as_dissolved", "SE_FSC_dry", "SE_FSC_carbon", "SE_FSC_nitrogen", "SE_fraction_canopy", "SE_frond_density", "SE_plant_density", "SE_plant_loss_rate",  "SE_frond_loss_rate", "SE_cut_frond_loss_rate", "SE_blade_loss_rate", "SE_dissolved_loss_rate", "SE_carbon_lost_as_plants", "SE_carbon_lost_as_fronds", "SE_carbon_lost_as_cut", "SE_carbon_lost_as_blades","SE_carbon_lost_as_dissolved"), check.names=TRUE)
+
+# replace -99999 with NA
+kelp_dem <- kelp_dem %>% mutate_at(c(colnames(kelp_dem[3:37])), list(~if_else(.==-99999, as.numeric(NA), .)))
+#remove unused columns and filter out data used in this study (max date at time of download)
+kelp_dem1 <- kelp_dem[, c(1, 2, 3, 6, 7, 8, 12, 13, 15)]
+kelp_dem1$Date <- as.Date(kelp_dem1$Date)
+kelp_dem1$Month <- month(kelp_dem1$Date)
+kelp_dem1$Year <- year(kelp_dem1$Date)
+kelp_dem1 <- kelp_dem1[which(kelp_dem$Date<="2022-02-03"),]
+
+# calculate drift production rates as the sum of the frond and blade loss rates (see "ODE_parameterization.Rmd" for more details)
+kelp_dem1$Frond_Blade_loss_rate <- kelp_dem1$Frond_loss_rate + kelp_dem1$Blade_loss_rate
+
+```
+
+
+# ensemble steps
+
+get the sets of external spore and drift input parameters (epsilon_s and epsilon_d) to use in the ODE simulations
+
+## metavals
+
+Get all metaparameters and format all data subsets used in all the simulations
+
+```{r}
+# number of times to repeat draws
+nrep <- 200
+```
+
+## datasubsets
+
+get the patch/year/semesters with the patch connectivities that most closely match the 10% and 90% patch connectivity quantiles (these were determined in "GLMM_work.Rmd")
+```{r}
+# 10% quantile
+timesq10 <- patch_conn[which(patch_conn$destination_patch=="221" & patch_conn$year==1999 & patch_conn$semester==2),]
+
+# 90% quantile
+timesq90 <- patch_conn[which(patch_conn$destination_patch=="174" & patch_conn$year==2004 & patch_conn$semester==1),]
+
+# join these together
+timesq10q90 <- rbind(timesq10, timesq90) %>% filter(source_patch != destination_patch) # filter out the cases where source = destination (time = 0)
+
+# get the observed ROMS times (which will be used for generating spore and drift dispersal times)
+meanRtimes <- timesq10q90$time
+
+```
+
+
+## metafunctions
+
+```{r}
+# make a function to get the dispersal times based on a mean slope (i.e., the relationship between the ROMS times and spore and drift dispersal times) and noise added to slope
+newtimes <- function(slope, oldtime, noise){
+  
+  new <- (slope + noise)*oldtime
+  
+  return(new)
+}
+
+#newtimes(0, 0.5, 8)
+
+# vectorize this function
+vnewtimes <- Vectorize(newtimes, c("oldtime", "noise"))
+
+
+# make a function to get potential connectivity from loss rates and dispersal times
+newpconn <- function(lossrate, dtime){
+  
+  pconn <- (1 -lossrate)^dtime # potential connectivity = (1-lambda)^tij
+  
+  return(pconn)
+}
+
+# vectorize this function
+vnewpconn <- Vectorize(newpconn, c("lossrate", "dtime"))
+
+
+```
+
+## draw values
+
+Draw values for the intermediate parameters in Table S4 (bold parameters in Table 2 in main text)
+
+### spore potential connectivities
+
+
+For each individual observation- i.e., dispersal time from each patch to either patch 221 in semester 2 of year 1999 (the 10% quantile of patch connectivity) or patch 174 in semester 1 of year 2004 (the 90% quantile of patch connectivity)- draw values of the spore dispersal time and loss rate. Assume each spore dispersal time is normally distributed with a mean equal to the corresponding observed ROMS time, and that each spore loss rate is normally distributed with a mean of 0.9/d: 
+```{r}
+# distribution of spore dispersal times (noise added to the observed ROMS times)
+plot(seq(from = -1, to = 1, length.out = 1000), dnorm(seq(from = -0.25, to = 0.25, length.out = 1000), 0, 0.01), type = "l", xlab = "x", ylab = "Prob(x)", xlim = c(-0.5, 0.5))
+
+# distribution of spore loss rates
+plot(seq(from = -0.1, to = 1.1, length.out = 1000), dnorm(seq(from = -0.1, to = 1.1, length.out = 1000), 0.9, 0.01), type = "l", xlab = "x", ylab = "Prob(x)", xlim = c(0.5, 1))
+
+```
+Repeat these simulations 200 times:
+
+```{r}
+
+# make a list to hold the vectors of spore dispersal times for each repetition
+spconn <- vector(mode="list", length=nrep)
+
+tic()
+# start for loop
+set.seed(110)
+for(i in 1:nrep){ # for each repetition
+  
+  # get the noise for each dispersal time
+  noises.t <- rnorm(length(meanRtimes),0,0.01)
+  
+  # get the loss rates (could also make the mean 0 and add the results to 0.9)
+  lossrates.i <- rnorm(length(meanRtimes),0.9,0.01) 
+
+  # replace anything less than 0 with min non-zero value
+  min.l <- min(lossrates.i[which(lossrates.i>0)])
+  lossrates.i <- ifelse(lossrates.i <=0, min.l, lossrates.i)
+  
+  # replace anything greater than 1 with the max value less than 1 
+  max.l <- max(lossrates.i[which(lossrates.i<1)])
+  lossrates.i <- ifelse(lossrates.i >=1, max.l, lossrates.i)
+
+# get the resulting spore dispersal times: mean slope is 1 (i.e., the mean is equal to the corresponding ROMS times)
+sporetimes.i <- vnewtimes(1, meanRtimes, noises.t)
+
+# get the min non-zero value
+min.i <- min(sporetimes.i[which(sporetimes.i>0)])
+
+# replace anything less than 0 with the min non-zero value
+sporetimes.i <- ifelse(sporetimes.i <=0, min.i, sporetimes.i)
+
+# get the potential connectivities
+spconn[[i]] <- vnewpconn(lossrates.i, sporetimes.i)
+  
+}
+
+toc() 
+
+```
+
+
+### drift potential connectivities
+
+For each individual observation, draw values of the drift dispersal time and loss rate. Assume each drift dispersal time is normally distributed with a mean equal to the corresponding observed ROMS time multiplied by a slope that is calculated as the sum of a baseline slope (uniformly distributed between 0.5 and 1.5 and applies to all observations) and individual noise (normally distributed with a mean of 0 and drawn for each individual observation). Similarly for the loss rates, assume each drift loss rate is normally distributed with a mean equal to the sum of a baseline loss rate (normally distributed with a mean of 0.75/d and applies to all observations) and individual noise:
+
+```{r}
+# mean slope relating the observed ROMS times to drift dispersal times (applies to all observations)
+plot(seq(from = 0.5, to = 1.5, length.out = 1000), dunif(seq(from = 0.5, to = 1.5, length.out = 1000), 0.5, 1.5), type = "l", xlab = "x", ylab = "Prob(x)")
+
+# noise around slope (for each individual observation)
+plot(seq(from = -1, to = 1, length.out = 1000), dnorm(seq(from = -0.25, to = 0.25, length.out = 1000), 0, 0.025), type = "l", xlab = "x", ylab = "Prob(x)")
+
+# mean drift loss rate (applies to all observations)
+plot(seq(from = -0.1, to = 1.1, length.out = 1000), dnorm(seq(from = -0.1, to = 1.1, length.out = 1000), 0.75, 0.2), type = "l", xlab = "x", ylab = "Prob(x)")
+
+# noise around the drift loss rate (for each individual observation)
+plot(seq(from = -1, to = 1, length.out = 1000), dnorm(seq(from = -0.25, to = 0.25, length.out = 1000), 0, 0.1), type = "l", xlab = "x", ylab = "Prob(x)")
+
+```
+
+Repeat these simulations 200 times:
+```{r}
+
+# make a list to hold the vectors of drift dispersal times for each repetition
+dpconn <- vector(mode="list", length=nrep)
+
+# get the mean slopes and loss rates for each repetition:
+set.seed(105)
+repslopes2 <- runif(nrep, 0.5, 1.5) # slopes from a uniform distribution
+
+set.seed(105)
+replosses <- rnorm(nrep, 0.75, 0.2) # loss rates from normal distribution
+
+# recode loss rates greater than 1 or less than 0
+minloss <- min(replosses[which(replosses>0)])
+replosses <- ifelse(replosses <=0, minloss, replosses)
+  
+# replace anything greater than 1 with the max value less than 1 
+maxloss <- max(replosses[which(replosses<1)])
+replosses <- ifelse(replosses >=1, maxloss, replosses)
+
+tic()
+# start for loop
+set.seed(105)
+for(i in 1:nrep){ # for each repetition
+  
+  # get the noise for the dispersal time slope
+  noises.t <- rnorm(length(meanRtimes),0,0.1)
+  
+  # get the loss rates, where mean is replosses[i] 
+  lossrates.i <- rnorm(length(meanRtimes),replosses[i],0.025)
+
+  # relace anything less than 0 with min non-zero value
+  min.l <- min(lossrates.i[which(lossrates.i>0)])
+  lossrates.i <- ifelse(lossrates.i <=0, min.l, lossrates.i)
+  
+  # replace anything greater than 1 with the max value less than 1 
+  max.l <- max(lossrates.i[which(lossrates.i<1)])
+  lossrates.i <- ifelse(lossrates.i >=1, max.l, lossrates.i)
+
+# get the spore dispersal times: equal to ROMS time x (repslopes2[i] + noises.t)
+drifttimes.i <- vnewtimes(repslopes2[i], meanRtimes, noises.t)
+
+# get the min non-zero value
+min.i <- min(drifttimes.i[which(drifttimes.i>0)])
+
+# replace anything less than 0 with the min non-zero value
+drifttimes.i <- ifelse(drifttimes.i <=0, min.i, drifttimes.i)
+
+# now get the potential connectivities
+dpconn[[i]] <- vnewpconn(lossrates.i, drifttimes.i)
+  
+}
+
+toc()
+
+```
+
+## biomass connectivity
+
+Draw values for the parameters describing the relationship between observed patch canopy biomasses and spore and drift production/export rates. For each source patch i, draw 1) a value representing uncertainty in the relationship between observed canopy biomass and total kelp biomass (theta_i), 2) a value for the fraction of locally produced spores retained in the source patch (omega_si), 3) a value for the fraction of locally produced drift retained in the source patch (omega_di), 4) a value of the spore production rate (rho), and 5) a value of the drift production rate (d). 1-3 are drawn for each individual source patch in each repetition, while 4-5 are drawn once for each repetition and apply to all source patches.
+
+Use the SBC LTER data downloaded above (saved as "kelp_dem") to infer the distributions of these parameter values:
+
+```{r}
+
+# relationship between canopy biomass and total kelp biomass: use values for the the fraction of kelp biomass located in the canopy recorded by the SBC LTER (for details on these measurements see https://sbclter.msi.ucsb.edu/external/Reef/Protocols/Kelp_NPP/KelpNPP_20180522.pdf)
+hist(kelp_dem1$FSC_fraction_canopy, xlim = c(0, 1))
+max(kelp_dem$FSC_fraction_canopy, na.rm=T)# 0.64
+mean(kelp_dem$FSC_fraction_canopy, na.rm=T)#0.2719865
+sd(kelp_dem$FSC_fraction_canopy, na.rm=T)
+
+# distribution to use: mean of 0.3, sd of 0.17
+plot(seq(from = -0.1, to = 1.1, length.out = 1000), dnorm(seq(from = -0.1, to = 1.1, length.out = 1000), 0.3, 0.15), type = "l", xlab = "x", ylab = "Prob(x)")
+abline(h = 0)
+abline(v = 0.64) # max observed
+
+
+# spore and drift retention/loss: mean of 0.25, 0-1 cut-offs
+plot(seq(from = -0.1, to = 1.1, length.out = 1000), dnorm(seq(from = -0.1, to = 1.1, length.out = 1000), 0.25, 0.1), type = "l", xlab = "x", ylab = "Prob(x)")
+
+
+# spore production: uniform from 1 to 100
+
+# drift production: 
+# check the data
+mean(log(kelp_dem1$Frond_Blade_loss_rate),na.rm = T)
+sd(log(kelp_dem1$Frond_Blade_loss_rate),na.rm = T)
+
+hist(kelp_dem1$Frond_Blade_loss_rate, n=30, xlab = "sum(frond and blade loss rates)", main = "NPP Detrital Production Rates")
+lines(seq(from = 0, to = 0.2, length.out = 1000), dlnorm(seq(from = 0, to = 0.2, length.out = 1000), -3.7, 0.5)*4, type = "l", xlab = "x", ylab = "Prob(x)")
+
+# use lognormal distribution
+plot(seq(from = 0, to = 0.2, length.out = 1000), dlnorm(seq(from = 0, to = 0.2, length.out = 1000), -3.7, 0.5), type = "l", xlab = "x", ylab = "Prob(x)") 
+
+
+```
+
+
+To draw values for each source patch, can use the same order as the dispersal times, and the ith coefficient will then correspond to the source patch in the ith row (but note this only works because only looking at 2 destination patches and from different years - if looking at multiple destination patches from the same year, the same source patch would appear more than once in the dispersal times data, and you would need to be careful not to give that source biomass different local parameters for each destination patch in the same year/semester)
+```{r}
+
+# make a list to hold the vectors of spore and drift coefficients for each repetition
+sbcoeff <- vector(mode="list", length=nrep)
+dbcoeff <- vector(mode="list", length=nrep)
+
+# get the spore production values
+set.seed(110)
+reprhos <- runif(nrep, 1, 100)
+
+# get the drift production values
+set.seed(110)
+repds <- rlnorm(nrep, -3.7, 0.5)
+
+tic()
+# start for loop
+set.seed(110)
+for(i in 1:nrep){
+  
+  # get the fraction canopy/patch biomass uncertainty coefficient
+  thetas <- rnorm(length(meanRtimes), 0.3, 0.15)
+  
+  # make sure they are between 0 and 1
+  # relace anything less than 0 with min non-zero value
+  min.th <- min(thetas[which(thetas>0)])
+  thetas <- ifelse(thetas <=0, min.th, thetas)
+  
+  # replace anything greater than 1 with the max value less than 1 
+  max.th <- max(thetas[which(thetas<1)])
+  thetas <- ifelse(thetas >=1, max.th, thetas)
+  
+  # get the retention value for spores (NOTE this is called omega_si in the main text and supplement)
+  etas.s <- rnorm(length(meanRtimes), 0.25, 0.1) 
+  
+  # relace anything less than 0 with min non-zero value
+  min.et <- min(etas.s[which(etas.s>0)])
+  etas.s <- ifelse(etas.s <=0, min.et, etas.s)
+  
+  # replace anything greater than 1 with the max value less than 1 
+  max.et <- max(etas.s[which(etas.s<1)])
+ etas.s <- ifelse(etas.s >=1, max.et, etas.s)
+ 
+ # get the retention value for drift (NOTE this is called omega_di in the main text and supplement)
+  etas.d <- rnorm(length(meanRtimes), 0.25, 0.1)
+  
+  # relace anything less than 0 with min non-zero value
+  min.etd <- min(etas.d[which(etas.d>0)])
+  etas.d <- ifelse(etas.d <=0, min.etd, etas.d)
+  
+  # replace anything greater than 1 with the max value less than 1 
+ max.etd <- max(etas.d[which(etas.d<1)])
+ etas.d <- ifelse(etas.d >=1, max.etd, etas.d)
+  
+# now get the spore biomass connectivity coefficients
+# product of theta, etas, spore production, and divided by mean patch area
+sbcoeff[[i]] <- reprhos[i]/thetas*etas.s/area.val
+
+# and the drift biomass connectivity coefficients
+# product of theta, etad, drift production, and divided by mean patch area
+dbcoeff[[i]] <- repds[i]/thetas*etas.d/area.val
+  
+}
+
+toc() 
+
+
+```
+
+### combine
+
+get source patch biomasses to multiply by the coefficients computed above
+
+```{r}
+#View(source_patches)
+
+patchdtq10q90 <- left_join(timesq10q90, source_patches, by = c("source_patch", "year", "semester"))
+
+#View(patchdtq10q90) # check order stayed the same
+
+```
+
+
+Want to get all possible combinations of the 200 patch production values (keeping the spore and drift values paired together since both based on the same patch biomass) and the 200 potential connectivity values
+
+```{r}
+# nested for loop where the outer is the rep for potential connectivity (1:200) and the inner is the rep for biomass connectivity (1:200)
+
+# multiple potential connectivity x biomass coeff x source biomass and sum them all to get a total patch connectivity for each patch (which here one patch is the 10% quantile and one is the 90% quantile)
+
+# holding matrices
+exts_q10 <- matrix(NA, nrep, nrep)
+exts_q90 <- matrix(NA, nrep, nrep)
+
+extd_q10 <- matrix(NA, nrep, nrep)
+extd_q90 <- matrix(NA, nrep, nrep)
+
+tic()
+for(i in 1:nrep){
+  
+  # get the potential connectivities for spores and drift
+  spotconni <- spconn[[i]]
+  dpotconni <- dpconn[[i]]
+  
+  for(j in 1:nrep){
+    
+  # get the products of the potential connectivities and biomass coeffs
+    sporecoeff <- spconn[[i]]*sbcoeff[[j]]
+    
+    driftcoeff <- dpconn[[i]]*dbcoeff[[j]]
+    
+  # multiply these by patch biomasses
+    spores <- sporecoeff*patchdtq10q90$source_biomass
+    
+    drift <- driftcoeff*patchdtq10q90$source_biomass
+    
+  # save the values of exts and extd
+exts_q10[i,j] <- sum(spores[which(patchdtq10q90$destination_patch=="221")]) # 10% patch
+exts_q90[i,j] <- sum(spores[which(patchdtq10q90$destination_patch=="174")]) # 90% patch
+
+extd_q10[i,j] <- sum(drift[which(patchdtq10q90$destination_patch=="221")]) # 10% patch
+extd_q90[i,j] <- sum(drift[which(patchdtq10q90$destination_patch=="174")]) # 90% patch
+    
+  }
+  
+}
+
+toc()
+
+
+```
+
+## quantiles
+
+### check distributions
+
+```{r}
+# check the overall distributions to make sure quantiles are a good representation of the full distribution
+hist(log(c(extd_q90)), n = 200, main = "external drift inputs for 90% quantile of patch connectivity (log scale)",  xlab = "log(epsilon_d)")
+abline(v = log(median(c(extd_q90))), col = "red")
+abline(v = log(quantile(c(extd_q90), 0.95)), col = "red")
+abline(v = log(quantile(c(extd_q90), 0.05)), col = "red")
+abline(v = log(quantile(c(extd_q90), 0.85)), col = "red")
+abline(v = log(quantile(c(extd_q90), 0.15)), col = "red")
+
+hist(log(c(extd_q10)), n = 200, main = "external drift inputs for 10% quantile of patch connectivity (log scale)", xlab = "log(epsilon_d)")
+abline(v = log(median(c(extd_q10))), col = "red")
+abline(v = log(quantile(c(extd_q10), 0.95)), col = "red")
+abline(v = log(quantile(c(extd_q10), 0.05)), col = "red")
+abline(v = log(quantile(c(extd_q10), 0.85)), col = "red")
+abline(v = log(quantile(c(extd_q10), 0.15)), col = "red")
+
+hist(log(c(exts_q90)), n = 200, main = "external spore inputs for 90% quantile of patch connectivity (log scale)",  xlab = "log(epsilon_s)")
+abline(v = log(median(c(exts_q90))), col = "red")
+abline(v = log(quantile(c(exts_q90), 0.95)), col = "red")
+abline(v = log(quantile(c(exts_q90), 0.05)), col = "red")
+abline(v = log(quantile(c(exts_q90), 0.85)), col = "red")
+abline(v = log(quantile(c(exts_q90), 0.15)), col = "red")
+
+hist(log(c(exts_q10)), n = 200, main = "external spore inputs for 10% quantile of patch connectivity (log scale)",  xlab = "log(epsilon_s)")
+abline(v = log(median(c(exts_q10))), col = "red")
+abline(v = log(quantile(c(exts_q10), 0.95)), col = "red")
+abline(v = log(quantile(c(exts_q10), 0.05)), col = "red")
+abline(v = log(quantile(c(exts_q10), 0.85)), col = "red")
+abline(v = log(quantile(c(exts_q10), 0.15)), col = "red")
+
+```
+
+### save quantiles
+
+save quantiles from the distributions to input into the ODE model
+
+```{r}
+# low connectivity (10% quantile of patch connectivity)
+# spores
+q10s5 <- as.numeric(quantile(c(exts_q10), 0.05))
+q10s95 <- as.numeric(quantile(c(exts_q10), 0.95))
+
+q10s15 <- as.numeric(quantile(c(exts_q10), 0.15))
+q10s85 <- as.numeric(quantile(c(exts_q10), 0.85))
+
+q10s25 <- as.numeric(quantile(c(exts_q10), 0.25))
+q10s75 <- as.numeric(quantile(c(exts_q10), 0.75))
+
+q10s50 <- as.numeric(quantile(c(exts_q10), 0.5))
+
+# drift
+q10d5 <- as.numeric(quantile(c(extd_q10), 0.05))
+q10d95 <- as.numeric(quantile(c(extd_q10), 0.95))
+
+q10d15 <- as.numeric(quantile(c(extd_q10), 0.15))
+q10d85 <- as.numeric(quantile(c(extd_q10), 0.85))
+
+q10d25 <- as.numeric(quantile(c(extd_q10), 0.25))
+q10d75 <- as.numeric(quantile(c(extd_q10), 0.75))
+
+q10d50 <- as.numeric(quantile(c(extd_q10), 0.5))
+
+# high connectivity (90% quantile of patch connectivity)
+# spores
+q90s5 <- as.numeric(quantile(c(exts_q90), 0.05))
+q90s95 <- as.numeric(quantile(c(exts_q90), 0.95))
+
+q90s15 <- as.numeric(quantile(c(exts_q90), 0.15))
+q90s85 <- as.numeric(quantile(c(exts_q90), 0.85))
+
+q90s25 <- as.numeric(quantile(c(exts_q90), 0.25))
+q90s75 <- as.numeric(quantile(c(exts_q90), 0.75))
+
+q90s50 <- as.numeric(quantile(c(exts_q90), 0.5))
+
+# drift
+q90d5 <- as.numeric(quantile(c(extd_q90), 0.05))
+q90d95 <- as.numeric(quantile(c(extd_q90), 0.95))
+
+q90d15 <- as.numeric(quantile(c(extd_q90), 0.15))
+q90d85 <- as.numeric(quantile(c(extd_q90), 0.85))
+
+q90d25 <- as.numeric(quantile(c(extd_q90), 0.25))
+q90d75 <- as.numeric(quantile(c(extd_q90), 0.75))
+
+q90d50 <- as.numeric(quantile(c(extd_q90), 0.5))
+
+
+```
+
+remove intermediate steps (just to clear up memory)
+
+```{r}
+
+rm(spconn)
+rm(sbcoeff)
+rm(dbcoeff)
+rm(dpconn)
+
+```
+
+
+# ODE model
+
+define the parameters and functions for simulating the ODE model
+
+## default pars
+
+```{r}
+exts = 0 #external spore input
+extd = 0 #external drift input
+ls = 0.5 #fraction of spores that leave patch
+ld = 0.5 #fraction of detritus that leaves patch
+rho = 10 #kelp reproduction rate (spores/kg adults/d), CHANGED from 5
+rG = 0.05 #gametophyte maturation rate
+muG = 0.6 # gametophyte mortality rate
+rJ = 0.004 #juvenile sporophyte growth rate
+muJ = 0.01 #juvenile sporophyte mortality rate
+K = 1 #adult carrying capacity
+muA = 0.002 #adult mortality rate
+qG = 1.2 # G's vulnerability to grazing relative to adults
+qJ = 1.2 # J's vulnerability to grazing relative to adults
+g = 0.025 #max urchin grazing rate on adults
+p = 0.1 #proportional reduction in active grazing when production = consumption
+d = 0.024 #fraction of biomass that becomes detritus
+gd = 0.0011 #rate of urchin grazing on detritus
+b = 7 #mean biomass per adult kelp plant. CHANGED from 12
+u = 0 #urchin density
+
+```
+
+## muA interp
+
+Define seasonal change in giant kelp background mortality
+
+```{r}
+# values from ODE_parameterization.Rmd
+
+muAQ1 <- 0.007 # mortality rate in quarter 1
+muAQ234 <- 0.001 # mortality rate in quarters 2, 3, and 4
+
+tchange.mu <- 14#assume increase/decrease between mortality rate in Q1 and rest of the year occurs over period of 2 weeks
+
+```
+
+make the function for the seasonal mu values
+
+```{r}
+#tvec = vector of timesteps, muvec = empty vector to be filled in with mu values, muQ234.f=initial value of mu, muQ1.f = high value of mu, tstart.rise.f = timepoint at which increase starts, tchange.f = length of time over which mu is changing (determines slope/rate of change), duration.f = amount of time mu is high
+mu.fun <- function(tvec, muvec, muQ234.f, muQ1.f, tstart.rise.f, tchange.f, duration.f){
+  
+  for(i in 1:length(tvec)){#for each timepoint in the times vector
+  t <- tvec[i]# t = the current timepoint
+  
+  if(t <= tstart.rise.f){#if t is less than the day at which mu starts to increase 
+      muvec[i] <- muQ234.f# mu is its lower value
+    } else if(t >= tstart.rise.f & t < tstart.rise.f + tchange.f){# if t is during the time when mu is increasing
+      muvec[i] <- muQ234.f + (muQ1.f - muQ234.f)/tchange.f*(t-tstart.rise.f)
+    } else if(t >= tstart.rise.f + tchange.f & t < tstart.rise.f + tchange.f + duration.f){
+      muvec[i] <- muQ1.f
+    } else if(t >= tstart.rise.f + tchange.f + duration.f & t < tstart.rise.f + 2*tchange.f + duration.f){
+      muvec[i] <- muQ1.f + (muQ234.f - muQ1.f)/tchange.f*(t-(tstart.rise.f + tchange.f + duration.f))
+    } else {
+      muvec[i] <- muQ234.f
+    }
+    
+}
+
+  return(muvec)
+  
+}
+
+
+```
+
+Get the sequence of muA values for a model run of one year, starting in the most commonly sampled month
+
+```{r}
+#View(full_datalvals)
+
+#month(full_datalvals$surv_date.k)
+
+#hist(month(full_datalvals$surv_date.k))# months 7 and 8 are most common
+
+# start the model on August 1 and run for one year. Choose year 2000 just to get an idea of the durations
+#as.numeric(as.Date("2000-08-01"))
+# start of Q1
+startQ1 <- as.numeric(as.Date("2001-01-01"))-as.numeric(as.Date("2000-08-01"))
+# Q1 duration
+durationQ1 <- as.numeric(as.Date("2001-03-31"))-as.numeric(as.Date("2001-01-01"))
+# end day
+#endday <- 365#as.numeric(as.Date("2001-08-01"))-as.numeric(as.Date("2000-08-01"))
+
+# get the timepoint values for the mu vectors (IMPORTANT: this needs to be the same time vector used in the model simulation)
+mutimes <-  seq(from = 0, to = 365, by = 1)
+
+# get the interpolated values, only one set of muAs used so only a single muint
+muts.df <- data.frame(times = mutimes, muval = rep(NA, length(mutimes))) 
+    
+muts.df$muval <- mu.fun(muts.df$times, muts.df$muval, muAQ234, muAQ1, startQ1, tchange.mu, durationQ1)
+
+# get the interpolated muA values
+muint <- approxfun(muts.df, rule = 2)
+  
+
+```
+
+
+
+## storm df
+
+get the severe storm events to put into the ODE model
+
+```{r}
+storm.vals <- c(1, 0.1)# (no storm, severe storm); assume big storms remove 90% of kelp
+
+# make storm occur in the middle of the first quarter
+t_storm <- as.numeric(as.Date("2001-02-15"))-as.numeric(as.Date("2000-08-01"))
+
+# storm.val = fraction adults remaining after storm; make fraction G and J remaining 2x this (less susceptible), or if this value is >1, make the fraction of G and J remaining equal to 1
+storms.df <- data.frame(var = c("G", "J", "A"), time = rep(t_storm, 3), value = c(min(1, 2*storm.vals[2]), min(1, 2*storm.vals[2]), storm.vals[2]), method=rep("mult", 3))#this can go directly into deSolve as an event
+
+nostorms.df <- data.frame(var = c("G","J","A"), time = rep(t_storm, 3), value = c(1, 1, 1), method=rep("mult", 3))
+
+storms.dfs <- list(nostorms.df, storms.df)
+
+#storms.dfs[[2]]
+
+```
+
+
+## model function
+
+define the function for simulating the model in deSolve, with the external forcing of the muA values
+```{r}
+mod.fun.full <- function (t, state, params) {
+  with(as.list(c(state, params)), {
+    
+    muA <- muAint(t)
+    
+    if(u == 0){
+    graze <- 0
+  } else{
+    graze <- 1/(1+(1-p)/p*((extd + (1-ld)*A*b*d)/(gd*u))^2)
+  }
+    
+    # ODE equations
+  dGdt <-  exts + (1-ls)*b*rho*A - rG*G - qG*g*u*graze*G - muG*G*G #gametophytes
+  dJdt <-  0.5*rG*G- rJ*J - qJ*g*u*graze*J - muJ*J*J#juveniles
+  dAdt <-  rJ*J*(1-A/K) - g*u*graze*A - muA*A#adults
+  
+  return(list(c(dGdt, dJdt, dAdt), muAs = muA))
+  })
+    
+}
+
+# NO muA in the parameter set
+
+
+```
+
+# GLMM predictions
+
+Read in the GLMM predictions and CIs (from "GLMM_work.Rmd")
+
+```{r}
+# no outliers
+glmmq10no <- read.csv("../../../intermediate_data_output/GLMM_data/glmmq10no.csv")
+glmmq90no <- read.csv("../../../intermediate_data_output/GLMM_data/glmmq90no.csv")
+
+# full dataset
+glmmq10 <- read.csv("../../../intermediate_data_output/GLMM_data/glmmq10.csv")
+glmmq90 <- read.csv("../../../intermediate_data_output/GLMM_data/glmmq90.csv")
+
+```
+
+# simulations
+
+Run the ODE model simulations to compare to the GLMM predictions
+
+## par sets
+
+define the sets of parameters to iterate over
+
+## par matrix
+
+make matrix of the random effect parameters (see "ODE_random_effects.Rmd" for where their values came from)
+```{r}
+
+# recruitment conditions
+# initial conditions
+G0.vals <- c(0, 2*1.3, 2*8.3)# low, intermediate, high
+J0.vals <- c(0, 1.3, 8.3)# low, intermediate, high
+# maturation rates
+rG.vals <- c(0.2*rG, rG, 1.2*rG)# low, intermediate, high
+rJ.vals <- c(0.2*rJ, rJ, 1.2*rJ)# low, intermediate, high
+# mortality rates
+muG.vals <- c(2*muG, muG, 0.5*muG)# high, intermediate, low
+muJ.vals <- c(2*muJ, muJ, 0.5*muJ)# high, intermediate, low
+
+# indicators: 1 = poor, 2 = normal/intermediate, 3 = favorable conditions
+recruit.set <- c(1, 2, 3)
+recruit.probs <- c(0.4, 0.48, 0.12) # probability of each recruitment conditions occurring
+
+# biomass
+b.vals <- c(1.783148,  4.158975,  7.394042, 12.845027, 34.354670)
+b.probs <- c(0.2, 0.2, 0.2, 0.2, 0.2) # probability of each biomass value occurring
+
+# storms
+storm.set <- c(1, 2)# no storm, big storm (note values are given as 0,1 not 1,2 in the main text and supplement)
+storm.probs <- c(0.75, 0.25) # probability of no storm vs. storm occurring
+
+```
+
+
+
+```{r}
+# make all of these into a dataset with all possible combinations
+
+pardf <- expand.grid(recruit.set, b.vals, storm.set)
+colnames(pardf) <- c("recruit", "b", "storm")
+
+#nrow(pardf)
+
+#turn this into a matrix
+parmat <- as.matrix(pardf)
+colnames(parmat) <- NULL #remove the column names of the matrix
+
+#parmat
+
+#1st col = recruit indicator, 2nd = b value, 3rd = storm indicator
+
+```
+
+
+## simulation pars
+
+```{r}
+# make initial high A0 value for the simulations
+# starting high A0 value
+A0.h <- max(full_datalvals$kelp_dens)
+
+# theshold for high kelp state
+thresh <- 0.05
+
+#make the vector of timesteps
+# time vector
+sim.times <- seq(from = 0, to = 365, by = 1) # run model for 1 year
+
+# set the muA values
+# mA int
+muAint <- muint
+
+# set of urchin densities
+urchset <- c(seq(from = 0, to = 50, by = 1), 75, 100, 165)
+
+```
+
+## functions
+
+make a function to run the simulation for an input of parameters (parmat) and connectivity values for spores and drift and a function to weight the results by their probability of occurring
+
+### Acrit sim
+
+function for calculating the minimum initial kelp density for which the system goes to the high kelp state (A0_min in main text, here referred to as Acrit)
+
+```{r}
+# function of the spore input, the drift input and the parmat matrix with all the random effect par combinations
+# always just use the default production and retention values for the local dynamics (since this produces a good fit in the no connectivity case)
+
+Acritsim.fun <- function(exts.f, extd.f, parmatf){ #function of external spore input, external drift input, and set of random effect parameter values
+
+#make the holding matrix: rows = par combos, cols = urchin density
+Acrit.f <- matrix(NaN, nrow = nrow(parmatf), ncol = length(urchset))
+
+for(i in 1:length(urchset)){# for each urchin density
+  
+  for(j in 1:length(parmatf[,1])){# for each combination of random effect parameters
+    
+    # get the parameter values
+    #1st col = recruit indicator, 2nd = b value, 3rd = storm indicator
+    params.ij = c(exts=exts.f, extd=extd.f, ls, ld, rho, rG=rG.vals[parmatf[j,1]], muG=muG.vals[parmatf[j,1]], rJ=rJ.vals[parmatf[j,1]], muJ=muJ.vals[parmatf[j,1]], K=1, qG, qJ, g, p, d, gd, b=parmatf[j,2], u = urchset[i])
+    
+    # first simulate the model with A0 starting high
+    # initial conditions
+xic.h <- c(G = G0.vals[parmatf[j,1]], J= J0.vals[parmatf[j,1]], A= A0.h)
+
+# run the model
+results.h <- ode(xic.h, sim.times, mod.fun.full, params.ij, method = "lsodes",events = list(data = storms.dfs[[parmatf[j,3]]]))
+    #colnames(results3) = c("time", "G", "J", "A", "muA")
+
+# get the A value
+A.test1 <- results.h[length(sim.times), 4]
+
+if(A.test1 < thresh){# if the system goes to the low state even at the max observed density
+    
+    Acrit.f[j, i] <- NA# Acrit is NA
+    
+  }  else { # if the system goes to the high state
+    
+    # run the model starting with A0=0
+    xic.l <- c(G = G0.vals[parmatf[j,1]], J= J0.vals[parmatf[j,1]], A= 0)
+    
+results.l <- ode(xic.l, sim.times, mod.fun.full, params.ij, method = "lsodes",events = list(data = storms.dfs[[parmatf[j,3]]]))
+  
+# get the A value
+A.test2 <- results.l[length(sim.times), 4]
+
+if(A.test2>=thresh){# if system goes to the high state when A0=0
+    
+    Acrit.f[j, i] <- 0# Acrit is 0
+    
+  }  else {# find the critical threshold
+    
+    # if A is at the low state when A0 is zero but not when A0=A0.h, then there is some threshold A0 between A0=A0.h and A0=0, so do the while loop to find this threshold 
+	
+	# assign the initial upper and lower A0 values
+	upper <- A0.h
+	lower <- 0
+	
+	while(upper-lower > 1*10^-3){#while the difference between the upper and lower bounds is greater than 10^-3
+	  
+	  mid = (upper + lower)/2#calculate the mid point
+	  
+	  #simulate the model with A0=mid 
+	  
+#initial conditions: A starts at mid
+	 xic.m <- c(G = G0.vals[parmatf[j,1]], J= J0.vals[parmatf[j,1]], A= mid)
+	  
+#simulate the model
+	 
+	 # simulate the model 
+  results.m <- ode(xic.m, sim.times, mod.fun.full, params.ij, method = "lsodes",events = list(data = storms.dfs[[parmatf[j,3]]])) # severe storms are modeled as an event in ode()
+  
+  A.test3 <- results.m[length(sim.times), 4]
+	  
+if(A.test3 >= thresh){#if A* for A0=mid is in the high state
+    upper <- mid #the mid point is too high, so mid is the new upper bound
+  } else {#if A* for A0=mid is not at the high eq (so its at the low eq.)
+    lower <- mid# the mid point is too low, so mid is the new lower bound
+  } 
+	  
+	}
+
+#the output of the while loop is the A0 threshold
+     Acrit.f[j, i] <- mid
+    
+    
+    
+  }
+
+  }
+    
+  }
+  
+
+}
+
+return(Acrit.f) # return the Acrit values for each par combination
+
+}
+
+```
+
+
+### Acrit to prob
+
+function for converting these Acrit values to probabilities
+
+```{r}
+AcritToProb <- function(Acrit.f, parmatf){
+
+# get the probabilities of being greater than Acrit
+Aprobs.f <- matrix(NaN, nrow = nrow(parmatf), ncol = length(urchset))
+
+for(i in 1:length(urchset)){# for each urchin density
+  
+  for(j in 1:length(parmatf[,1])){# for each combination of parameters
+    
+    if(is.na(Acrit.f[j,i])==T){
+      Aprobs.f[j,i] <- 0# if Acrit wqs NA (always went low), p(high)=0
+    } else{
+      # p(high) is the prob of being greater than the critical value
+      Aprobs.f[j,i] <- length(full_datalvals$kelp_dens[which(full_datalvals$kelp_dens>=Acrit.f[j,i])])/length(full_datalvals$kelp_dens)
+      
+    }
+
+  }
+}
+
+return(Aprobs.f)
+
+}
+
+```
+
+### weighting
+
+function for weighting the results for each parameter combination by the probability of that combination occurring
+```{r}
+
+# get the probabilities of each par combination
+# function of the probabilities that A > Acrit, probabilities of each b value, of each recruit index, and of each storm index
+WeightProbs <- function(Aprobs.f, b.probsf, recruit.probsf, storm.probsf, parmatf){
+  
+
+# get the probabilities of each par combination
+parprobs <-NaN*parmatf[,1]
+
+#1st col = recruit indicator, 2nd = b value, 3rd = storm indicator
+for(i in 1:nrow(parmatf)){
+  
+  recruit.probi <- recruit.probsf[which(recruit.set==parmatf[i,1])]
+  
+  b.probi <- b.probsf[which(b.vals==parmatf[i,2])]
+  
+  storm.probi <- storm.probsf[which(storm.set==parmatf[i,3])]
+  
+  parprobs[i] <- recruit.probi*b.probi*storm.probi # joint probability
+  
+}
+
+#sum(parprobs) should be 1
+
+# now get the total probabilities
+phigh.f <- NaN*urchset
+
+for(i in 1:length(urchset)){
+  
+  phigh.f[i] <- sum(parprobs*Aprobs.f[ ,i])
+  
+}
+
+return(phigh.f)
+
+}
+
+```
+
+## run simulations
+
+run the ODE model simulations to compare to the GLMM predictions
+
+### no connectivity
+
+```{r}
+tic()
+Acrit.noc <- Acritsim.fun(0, 0, parmat) #Acrit values
+toc()
+
+Aprobs.noc <- AcritToProb(Acrit.noc, parmat) # probabilities that A > Acrit
+
+phigh.noc <- WeightProbs(Aprobs.noc, b.probs, recruit.probs, storm.probs, parmat) # weighted probabilities of A > Acrit
+
+
+```
+
+
+```{r}
+
+# check the results
+plot(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1.5, xlab = "Urchin density", ylab = "Prob(high kelp)", main = "ODE predictions; no connectivity", ylim = c(0,1), xlim = c(0, 50))
+lines(x = urchset, y =glmmq10no$pred, type="l", lty = 1)
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+
+
+```
+
+### Fig S20
+
+plot all of the intermediate steps together with the final result for the case with no patch connectivity
+
+```{r}
+
+# use layout matrix 
+#layout(matrix(c(1, 2, 3, 4, 5, 6, 7, 8, 8), nrow = 3, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 3))
+#layout.show(8)
+
+b.cols <- c("#E69F00", "#009E73", "#0072B2", "#56B4E9","#D55E00")
+
+pdf("FullrandeffProbs.pdf", height = 5, width = 9)
+par(mfrow = c(3, 3), oma = c(4, 2, 2, 1))
+layout(matrix(c(1, 2, 3, 4, 5, 6, 7, 8, 8), nrow = 3, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 3))
+par(mai=c(0.01,0.5,0.15,0.01))
+# 1-3 = Acrit plots
+# POOR RECRUITMENT (parmat[,1]=1)
+plot(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, A0.h), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = NA)
+segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[1] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[1])
+# no storm (parmat[,3]=1)
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd=1.5)
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]), Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==2), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]))], y1 = 10, col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("a) Poor recruitment", side=3, cex = 0.75, adj = 0)
+
+# INTERMEDIATE RECRUITMENT (parmat[,1]=2)
+plot(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, A0.h), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = NA)
+segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[1] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[1])
+# no storm
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd=1.5)
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]), Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==2), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]))], y1 = 10, col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("b) Intermediate recruitment", side=3, cex = 0.75, adj = 0)
+mtext(expression("Critical initial kelp density A"[0*"min"]), side=2, cex=0.9, line = 1.5)#adj=0#outer=TRUE
+#mtext("Urchin density", side=1, cex=1, adj=1.5, padj = 3)
+
+
+# FAVORABLE RECRUITMENT (parmat[,1]=3)
+plot(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, A0.h), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = c(0, 10, 20, 30, 40, 50))
+segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[1] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[1] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[1])
+# no storm
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]), Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==1), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==1),])==F)]))], y1 = 10, col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd=1.5)
+  segments(max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]), Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==2), which(urchset == max(urchset[which(is.na(Acrit.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==2),])==F)]))], y1 = 10, col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("c) Favorable recruitment", side=3, cex = 0.75, adj = 0)
+mtext(expression("Urchin density (ind./m"^2*")"), side=1, cex=0.9, line = 2.4, outer = TRUE, adj=0.35)
+
+
+# 4-6 = prob high plots
+# POOR RECRUITMENT (parmat[,1]=1)
+# no storm (parmat[,3]=1)
+plot(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, 1), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = NA)
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==1 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("d) Poor recruitment", side=3, cex = 0.75, adj = 0)
+legend(x = "topright", legend = c("1.8",  "4.2",  "7.4", "12.8", "34.4"), col = b.cols, title = "Biomass/plant", bty = "n", lwd = 2, lty = 1, cex = 0.9)
+legend(x = "top", legend = c("no storm", "storm"), lty = c(1, 2), title = "Disturbance", bty = "n", lwd = 1.5, cex = 0.9)
+
+# INTERMEDIATE RECRUITMENT (parmat[,1]=2)
+# no storm
+plot(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, 1), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = NA)
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==2 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("e) Intermediate recruitment", side=3, cex = 0.75, adj = 0)
+mtext("P(high kelp)", side=2, cex=0.9, line = 2.5)#adj=0,#outer=TRUE
+
+# FAVORABLE RECRUITMENT (parmat[,1]=3)
+# no storm
+plot(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[1] & parmat[,3]==1),][1:51], type = "l", xlab = NA, ylab = NA, ylim = c(0, 1), main = NA, col = b.cols[1], xlim = c(0, 50), las = 1, xaxt = "n")
+axis(side = 1, at = c(0, 10, 20, 30, 40, 50), labels = c(0, 10, 20, 30, 40, 50))
+for(i in 2:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==1),][1:51], type = "l", col = b.cols[i])
+}
+# with storm (parmat[,3]=2)
+for(i in 1:length(b.vals)){
+  lines(x = urchset[1:51], y = Aprobs.noc[which(parmat[ ,1]==3 & parmat[, 2]==b.vals[i] & parmat[,3]==2),][1:51], type = "l", col = b.cols[i], lty = 2, lwd = 1.5)
+}
+mtext("f) Favorable recruitment", side=3, cex = 0.75, adj = 0)
+
+
+# blank plot
+plot(0,type='n',axes=FALSE, ann = FALSE)# empty plot
+#text(x=1, y = 1,"test")
+text(x=0.7, y = 0,expression(bar("P(high kelp)")), cex = 1.11)#
+text(x=1, y = -0.5,expression("="*sum(P(high~kelp)[i]*P(recruit[i])*P(storm[i])*P(b[i]), i ==1, 30)), cex = 1.11)
+
+# 10 = final output
+plot(x = urchset[1:51], y = phigh.noc[1:51], type = "l", col = "darkgoldenrod", lwd = 1.2, xlim = c(0, 50), ylim = c(0,1), xlab = NA, ylab = NA, las = 1)
+mtext(expression("Urchin density (ind./m"^2*")"), side = 1, line = 2.5, cex = 0.9)
+mtext(expression(bar("P(high kelp)")), side = 2, line =2, cex = 0.9)
+mtext("g) Final output", side=3, cex=1, adj = 0)
+# 11= blank plot
+#plot(0,type='n',axes=FALSE, ann = FALSE)# empty plot
+dev.off()
+
+
+```
+
+
+
+
+### patch connectivity quantiles
+
+Repeat the above simulations for the different quantiles of epsilon_s and epsilon_d corresponding to the 10% and 90% patch connectivity quantiles
+
+calculate the Acrit (A0min) values
+
+note this takes about 80 min
+
+```{r}
+
+# 10% quantile of patch connectivity
+tic()
+# spores only; 5, 15, 50, 85, and 89% quantiles of values of external spore input
+Acrit.q10s5 <- Acritsim.fun(q10s5, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q10s15 <- Acritsim.fun(q10s15, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q10s50 <- Acritsim.fun(q10s50, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q10s85 <- Acritsim.fun(q10s85, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q10s95 <- Acritsim.fun(q10s95, 0, parmat) # exts.f, extd.f, parmatf
+
+# repeat for drift only
+Acrit.q10d5 <- Acritsim.fun(0, q10d5, parmat) # exts.f, extd.f, parmatf
+Acrit.q10d15 <- Acritsim.fun(0, q10d15, parmat) # exts.f, extd.f, parmatf
+Acrit.q10d50 <- Acritsim.fun(0, q10d50, parmat) # exts.f, extd.f, parmatf
+Acrit.q10d85 <- Acritsim.fun(0, q10d85, parmat) # exts.f, extd.f, parmatf
+Acrit.q10d95 <- Acritsim.fun(0, q10d95, parmat) # exts.f, extd.f, parmatf
+
+# repeat for drift and spores
+Acrit.q10sd5 <- Acritsim.fun(q10s5, q10d5, parmat) # exts.f, extd.f, parmatf
+Acrit.q10sd15 <- Acritsim.fun(q10s15, q10d15, parmat) # exts.f, extd.f, parmatf
+Acrit.q10sd50 <- Acritsim.fun(q10s50, q10d50, parmat) # exts.f, extd.f, parmatf
+Acrit.q10sd85 <- Acritsim.fun(q10s85, q10d85, parmat) # exts.f, extd.f, parmatf
+Acrit.q10sd95 <- Acritsim.fun(q10s95, q10d95, parmat) # exts.f, extd.f, parmatf
+
+toc() #2458.864 sec elapsed
+
+
+# 90% quantile of patch connectivity
+tic()
+# spores
+Acrit.q90s5 <- Acritsim.fun(q90s5, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q90s15 <- Acritsim.fun(q90s15, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q90s50 <- Acritsim.fun(q90s50, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q90s85 <- Acritsim.fun(q90s85, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q90s95 <- Acritsim.fun(q90s95, 0, parmat) # exts.f, extd.f, parmatf
+
+# drift
+Acrit.q90d5 <- Acritsim.fun(0, q90d5, parmat) # exts.f, extd.f, parmatf
+Acrit.q90d15 <- Acritsim.fun(0, q90d15, parmat) # exts.f, extd.f, parmatf
+Acrit.q90d50 <- Acritsim.fun(0, q90d50, parmat) # exts.f, extd.f, parmatf
+Acrit.q90d85 <- Acritsim.fun(0, q90d85, parmat) # exts.f, extd.f, parmatf
+Acrit.q90d95 <- Acritsim.fun(0, q90d95, parmat) # exts.f, extd.f, parmatf
+
+# drift and spores
+Acrit.q90sd5 <- Acritsim.fun(q90s5, q90d5, parmat) # exts.f, extd.f, parmatf
+Acrit.q90sd15 <- Acritsim.fun(q90s15, q90d15, parmat) # exts.f, extd.f, parmatf
+Acrit.q90sd50 <- Acritsim.fun(q90s50, q90d50, parmat) # exts.f, extd.f, parmatf
+Acrit.q90sd85 <- Acritsim.fun(q90s85, q90d85, parmat) # exts.f, extd.f, parmatf
+Acrit.q90sd95 <- Acritsim.fun(q90s95, q90d95, parmat) # exts.f, extd.f, parmatf
+
+
+toc() #2191.728 sec elapsed
+
+
+```
+
+adding some additional external spore and drift quantiles
+
+takes about 30 min
+
+```{r}
+# 10% quantile of patch connectivity
+tic()
+# spores only; 5, 15, 50, 85, and 89% quantiles of values of external spore input
+Acrit.q10s25 <- Acritsim.fun(q10s25, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q10s75 <- Acritsim.fun(q10s75, 0, parmat) # exts.f, extd.f, parmatf
+
+# repeat for drift only
+Acrit.q10d25 <- Acritsim.fun(0, q10d25, parmat) # exts.f, extd.f, parmatf
+Acrit.q10d75 <- Acritsim.fun(0, q10d75, parmat) # exts.f, extd.f, parmatf
+
+# repeat for drift and spores
+Acrit.q10sd25 <- Acritsim.fun(q10s25, q10d25, parmat) # exts.f, extd.f, parmatf
+Acrit.q10sd75 <- Acritsim.fun(q10s75, q10d75, parmat) # exts.f, extd.f, parmatf
+
+# 90% quantile of patch connectivity
+# spores
+Acrit.q90s25 <- Acritsim.fun(q90s25, 0, parmat) # exts.f, extd.f, parmatf
+Acrit.q90s75 <- Acritsim.fun(q90s75, 0, parmat) # exts.f, extd.f, parmatf
+
+# drift
+Acrit.q90d25 <- Acritsim.fun(0, q90d25, parmat) # exts.f, extd.f, parmatf
+Acrit.q90d75 <- Acritsim.fun(0, q90d75, parmat) # exts.f, extd.f, parmatf
+
+# drift and spores
+Acrit.q90sd25 <- Acritsim.fun(q90s25, q90d25, parmat) # exts.f, extd.f, parmatf
+Acrit.q90sd75 <- Acritsim.fun(q90s75, q90d75, parmat) # exts.f, extd.f, parmatf
+
+toc() #1841.061 sec elapsed
+
+
+```
+
+do the weighting
+
+```{r}
+
+# 10% quantile of patch connectivity
+# spores only
+phigh.q10s5 <- WeightProbs(AcritToProb(Acrit.q10s5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10s15 <- WeightProbs(AcritToProb(Acrit.q10s15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10s50 <- WeightProbs(AcritToProb(Acrit.q10s50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10s85 <- WeightProbs(AcritToProb(Acrit.q10s85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10s95 <- WeightProbs(AcritToProb(Acrit.q10s95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift only
+phigh.q10d5 <- WeightProbs(AcritToProb(Acrit.q10d5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10d15 <- WeightProbs(AcritToProb(Acrit.q10d15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10d50 <- WeightProbs(AcritToProb(Acrit.q10d50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10d85 <- WeightProbs(AcritToProb(Acrit.q10d85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10d95 <- WeightProbs(AcritToProb(Acrit.q10d95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift and spores
+phigh.q10sd5 <- WeightProbs(AcritToProb(Acrit.q10sd5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10sd15 <- WeightProbs(AcritToProb(Acrit.q10sd15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10sd50 <- WeightProbs(AcritToProb(Acrit.q10sd50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10sd85 <- WeightProbs(AcritToProb(Acrit.q10sd85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10sd95 <- WeightProbs(AcritToProb(Acrit.q10sd95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+
+# 90% quantile of patch connectivity
+# spores only
+phigh.q90s5 <- WeightProbs(AcritToProb(Acrit.q90s5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90s15 <- WeightProbs(AcritToProb(Acrit.q90s15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90s50 <- WeightProbs(AcritToProb(Acrit.q90s50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90s85 <- WeightProbs(AcritToProb(Acrit.q90s85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90s95 <- WeightProbs(AcritToProb(Acrit.q90s95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift only
+phigh.q90d5 <- WeightProbs(AcritToProb(Acrit.q90d5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90d15 <- WeightProbs(AcritToProb(Acrit.q90d15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90d50 <- WeightProbs(AcritToProb(Acrit.q90d50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90d85 <- WeightProbs(AcritToProb(Acrit.q90d85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90d95 <- WeightProbs(AcritToProb(Acrit.q90d95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift and spores
+phigh.q90sd5 <- WeightProbs(AcritToProb(Acrit.q90sd5, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90sd15 <- WeightProbs(AcritToProb(Acrit.q90sd15, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90sd50 <- WeightProbs(AcritToProb(Acrit.q90sd50, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90sd85 <- WeightProbs(AcritToProb(Acrit.q90sd85, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90sd95 <- WeightProbs(AcritToProb(Acrit.q90sd95, parmat), b.probs, recruit.probs, storm.probs, parmat)
+
+```
+
+for the extra intervals:
+
+```{r}
+# 10% quantile of patch connectivity
+# spores only
+phigh.q10s25 <- WeightProbs(AcritToProb(Acrit.q10s25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10s75 <- WeightProbs(AcritToProb(Acrit.q10s75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift only
+phigh.q10d25 <- WeightProbs(AcritToProb(Acrit.q10d25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10d75 <- WeightProbs(AcritToProb(Acrit.q10d75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift and spores
+phigh.q10sd25 <- WeightProbs(AcritToProb(Acrit.q10sd25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q10sd75 <- WeightProbs(AcritToProb(Acrit.q10sd75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+
+# 90% quantile of patch connectivity
+# spores only
+phigh.q90s25 <- WeightProbs(AcritToProb(Acrit.q90s25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90s75 <- WeightProbs(AcritToProb(Acrit.q90s75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift only
+phigh.q90d25 <- WeightProbs(AcritToProb(Acrit.q90d25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90d75 <- WeightProbs(AcritToProb(Acrit.q90d75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+# drift and spores
+phigh.q90sd25 <- WeightProbs(AcritToProb(Acrit.q90sd25, parmat), b.probs, recruit.probs, storm.probs, parmat)
+phigh.q90sd75 <- WeightProbs(AcritToProb(Acrit.q90sd75, parmat), b.probs, recruit.probs, storm.probs, parmat)
+
+```
+
+check the results
+```{r}
+# 90% quantile, both spore and drift input:
+plot(x = urchset, y = phigh.q90sd50, type = "l", col = "darkgoldenrod", lwd = 1.5, xlab = "Urchin density", ylab = "Prob(high kelp)", main = "ODE predictions; no connectivity", ylim = c(0,1), xlim = c(0, 52))
+lines(x = urchset, y =glmmq90no$pred, type="l", lty = 1, col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd15, type = "l", col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd85, type = "l", col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd25, type = "l", col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd75, type = "l", col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd5, type = "l", col = "darkgoldenrod")
+lines(x = urchset, y = phigh.q90sd95, type = "l", col = "darkgoldenrod")
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+
+```
+
+
+# Fig 6
+
+plot Figure 6 
+
+```{r}
+#layout(matrix(c(1, 2, 3, 4, 5, 6), nrow = 2, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 2))
+#layout.show(6)
+
+alpha.ode <- 0.3
+
+pdf("Fig6compare.pdf")
+par(mfrow = c(2, 3), oma=c(2,4,1,0))
+layout(matrix(c(1, 4, 2, 5, 3, 6), nrow = 2, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 2))
+par(mai=c(0.3,0.1,0.15,0.01))
+# SPORE ONLY LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  c(0, 0.2, 0.4, 0.6, 0.8, 1), las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q10s50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10s15, rev(phigh.q10s85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("a) Spore only, low", side=3, cex=1, adj = 0,line = 0)
+mtext("Probability of kelp being in high state", side=2, cex=1, outer=TRUE, adj=0.5, line = 1.75)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+legend(x = 20, y = 0.8, legend = c("GLMM", "ODE"), col= c("black", "darkgoldenrod"), lwd=2, bty="n", ncol=1, cex=1.5)#title = "Model predictions"
+# DRIFT ONLY LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q10d50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10d15, rev(phigh.q10d85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("b) Drift only, low", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# SPORES AND DRIFT LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q10sd50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10sd15, rev(phigh.q10sd85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("c) Spore & drift, low", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# SPORES ONLY HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  c(0, 0.2, 0.4, 0.6, 0.8, 1), las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q90s50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90s15, rev(phigh.q90s85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("d) Spore only, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# DRIFT ONLY HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q90d50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90d15, rev(phigh.q90d85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("e) Drift only, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+mtext(expression("Urchin density (ind./m"^2*")"), side=1, cex=1, line = 2.5)
+# SPORES AND DRIFT HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 1, lty = 2)
+lines(x = urchset, y = phigh.q90sd50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90sd15, rev(phigh.q90sd85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode), border = NA)
+mtext("e) Spore & drift, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+dev.off()
+
+```
+
+
+# Fig S23
+
+Plot additional intervals of the external spore and drift values
+
+```{r}
+#layout(matrix(c(1, 2, 3, 4, 5, 6), nrow = 2, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 2))
+#layout.show(6)
+
+alpha.ode2 <- 0.15
+
+pdf("Compareintervals.pdf")
+par(mfrow = c(2, 3), oma=c(2,4,1,0))
+layout(matrix(c(1, 4, 2, 5, 3, 6), nrow = 2, ncol = 3), widths = rep.int(1, 3), heights =rep.int(1, 2))
+par(mai=c(0.3,0.1,0.15,0.01))
+# SPORE ONLY LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  c(0, 0.2, 0.4, 0.6, 0.8, 1), las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+lines(x = urchset, y = phigh.q10s50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10s15, rev(phigh.q10s85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q10s95, rev(phigh.q10s5)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q10s25, rev(phigh.q10s75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 6)
+mtext("a) Spore only, low", side=3, cex=1, adj = 0,line = 0)
+mtext("Probability of kelp being in high state", side=2, cex=1, outer=TRUE, adj=0.5, line = 1.75)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+legend("topright", legend = c("GLMM", "ODE"), col= c("black", "darkgoldenrod"), lwd=2, bty="n", ncol=1, cex=1.5)#title = "Model predictions"
+legend("right", legend = c("5-95", "15-85", "25-75", "50"), col= rep("darkgoldenrod", 4),lty = c(3, 2, 6, 1), lwd=1.5, bty="n", ncol=1, cex=1.5, title = expression(epsilon["s"]~quantiles))
+# DRIFT ONLY LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 2, lty = 3)
+lines(x = urchset, y = phigh.q10d50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10d15, rev(phigh.q10d85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q10d5, rev(phigh.q10d95)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q10d25, rev(phigh.q10d75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 6)
+mtext("b) Drift only, low", side=3, cex=1, adj = 0,line = 0)
+legend("topright", legend = c("5-95", "15-85", "25-75", "50"), col= rep("darkgoldenrod", 4),lty = c(3, 2, 6, 1), lwd=1.5, bty="n", ncol=1, cex=1.5, title = expression(epsilon["d"]~quantiles))#title = "Model predictions"
+# DRIFT ONLY LOW CONN
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# SPORES AND DRIFT LOW CONN
+plot(x = urchset, y =glmmq10no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq10no$CI.low, rev(glmmq10no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 2, lty = 3)
+lines(x = urchset, y = phigh.q10sd50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q10sd15, rev(phigh.q10sd85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q10sd5, rev(phigh.q10sd95)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q10sd25, rev(phigh.q10sd75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 6)
+mtext("c) Spore & drift, low", side=3, cex=1, adj = 0,line = 0)
+legend("topright", legend = c("5-95", "15-85", "25-75", "50"), col= rep("darkgoldenrod", 4),lty = c(3, 2, 6, 1), lwd=1.5, bty="n", ncol=1, cex=1.5, title = expression(epsilon["d"]~'&'~epsilon["d"]~quantiles))
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# SPORES ONLY HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  c(0, 0.2, 0.4, 0.6, 0.8, 1), las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+lines(x = urchset, y = phigh.q90s50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90s15, rev(phigh.q90s85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q90s5, rev(phigh.q90s95)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q90s25, rev(phigh.q90s75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2),  border ="darkgoldenrod", lty = 6)
+mtext("d) Spore only, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+# DRIFT ONLY HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 2, lty = 3)
+lines(x = urchset, y = phigh.q90d50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90d15, rev(phigh.q90d85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q90d5, rev(phigh.q90d95)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q90d25, rev(phigh.q90d75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 6)
+mtext("e) Drift only, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+mtext(expression("Urchin density (ind./m"^2*")"), side=1, cex=1, line = 2.5)
+# SPORES AND DRIFT HIGH CONN
+plot(x = urchset, y =glmmq90no$pred, ylim = c(0,1), type = "l", xlab = NA, ylab = NA, lty = 1, col = "black", xlim = c(0,50), las = 1, yaxt = "n")# plot the GLMM loss rates
+axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1), labels =  NA, las = 1)# to show tick marks but not tick labels, need to make yaxt = "n" then add axis() with labels = NA
+polygon(c(urchset, rev(urchset)), c(glmmq90no$CI.low, rev(glmmq90no$CI.up)),  col=gray(0.5,0.25), border = NA)
+#lines(x = urchset, y = phigh.noc, type = "l", col = "darkgoldenrod", lwd = 2, lty = 3)
+lines(x = urchset, y = phigh.q90sd50, type = "l", col = "darkgoldenrod", lwd = 2, lty = 1)
+polygon(c(urchset, rev(urchset)), c(phigh.q90sd15, rev(phigh.q90sd85)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 2)
+polygon(c(urchset, rev(urchset)), c(phigh.q90sd95, rev(phigh.q90sd5)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 3)
+polygon(c(urchset, rev(urchset)), c(phigh.q90sd25, rev(phigh.q90sd75)),  col=adjustcolor(col = "darkgoldenrod", alpha.f = alpha.ode2), border ="darkgoldenrod", lty = 6)
+mtext("e) Spore & drift, high", side=3, cex=1, adj = 0,line = 0)
+#mtext("Prob(high kelp)", side=2, cex=1, outer=TRUE, adj=0.5, line = 1)
+#mtext("Urchin density", side=1, cex=1, line = 2)
+dev.off()
+
+```
+
+
+
+
+
+
+
+
