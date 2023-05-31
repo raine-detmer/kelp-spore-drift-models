@@ -9,9 +9,11 @@ This repository contains all code used in the manuscript “Modeling grazer-medi
 - ODE_validation_GLMM: code for running ODE model simulations to compare to the predictions of the GLMM model
 - Supp_drift_kelp: code for analyzing published data on drifting kelp plants (Ohlmann 2019)
 
-The "intermediate_data_output" folder includes any datasets that were subset/produced in one .Rmd file or in a different programming language (some ODE model analyses and data processing were done in Mathematica v13.0 and Matlab vR2021b, respectively) and subsequently used in another .Rmd file. Note all code that exports or imports these intermediate data files requires the same file structure as in this github repository to run.
+The "intermediate_data_output" folder includes any datasets that were subset/formatted from their original sources in one .Rmd file or in a different programming language (some ODE model analyses and data processing were done in Mathematica v13.0 and Matlab vR2021b, respectively) and subsequently used in another .Rmd file. Note all code that exports or imports these intermediate data files requires the same file structure as in this github repository to run.
 
-Citations for all public datasets used in analyses:
+Citations for all datasets used in analyses:
+
+Bell et al. (in prep)
 
 Castorani MCN, Reed DC, Raimondi PT, Alberto F, Bell TW, Cavanaugh KC, Siegel DA (2022) Kelp metapopulations: Semi-annual time series of giant kelp patch area, biomass and fecundity in southern California, 1996 – 2006 ver 2. Environmental Data Initiative. https://doi.org/10.6073/pasta/4c5a27154458ece5585384339eb0c2ee
 
