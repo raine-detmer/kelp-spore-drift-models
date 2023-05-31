@@ -591,7 +591,7 @@ dev.off()
 
 Combine data on quarterly max swell heights in landsat pixels with the transects in these pixels (this is in order to infer storm regimes throughout the study region when doing ODE model validation simulations)
 
-The swell height data were collected by the Coastal Data Information Program (CDIP;  http://cdip.ucsd.edu/MOP_v1.1/) and formatted to give the quarterly maximum wave height in each Landsat pixel in the southern California Bight by Dr. Tom Bell. The original data were provided in netcdf format; data from pixels in the study region were subsetted out and converted to csv's in Matlab (see LandsatWaves.m)
+The swell height data were collected by the Coastal Data Information Program (CDIP;  http://cdip.ucsd.edu/MOP_v1.1/) and formatted to give the quarterly maximum wave height in each Landsat pixel in the southern California Bight by Bell et al. in prep. The original data were provided in netcdf format; data from pixels in the study region were subsetted out and converted to csv's in Matlab (see LandsatWaves.m)
 
 import the subsetted data
 ```{r}
@@ -1151,7 +1151,7 @@ urchkelpplot <- full_datalvals %>% mutate(kelp_state =if_else(is.na(kelp_dens)==
   theme_bw() + #make the background white not gray
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 13), axis.text = element_text(size = 12), axis.title = element_text(size = 12), axis.title.y = element_blank())+#remove gridlines and adjust label sizes. for making plot outline green: plot.background = element_rect(colour = "chartreuse1", fill=NA, size=2.5)
   #xlab(label = "Kelp state") +
-  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ylab(label=expression("Urchin density (ind. m"^-2*")")) +
   ggtitle("b) Effect of urchin density on kelp state")
 #dev.off()
 
@@ -1299,7 +1299,7 @@ ggplot(aes(x = patch, y = urchin_dens)) +
   theme_bw() + #make the background white not gray
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes #, axis.title.y = element_blank()
   xlab(label = "Patch") + 
-  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ylab(label=expression("Urchin density (ind. m"^-2*")")) +
   ggtitle("a) Mainland patches")
 #dev.off()
 
@@ -1325,7 +1325,7 @@ ggplot(aes(x = patch, y = urchin_dens)) +
   theme_bw() + #make the background white not gray
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 12), axis.text = element_text(size = 9), axis.title = element_text(size = 12))+#remove gridlines and adjust label sizes
   xlab(label = "Patch") + 
-  ylab(label=expression("Urchin density (ind./m"^2*")")) +
+  ylab(label=expression("Urchin density (ind. m"^-2*")")) +
   ggtitle("b) Island patches")
 #dev.off()
 
