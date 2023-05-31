@@ -1,9 +1,13 @@
 % README: getting the data on quarterly wave heights in Landsat pixels
-% these data were provided by Dr. Tom Bell
-
+% The swell height data were collected by the Coastal Data Information Program 
+% (CDIP;  http://cdip.ucsd.edu/MOP_v1.1/) and formatted to give the quarterly 
+% maximum wave height in each Landsat pixel in the southern California Bight 
+% by Bell et al. in prep.
 
 % use ncinfo to display the file information
-info = ncinfo('/Users/dandetmer/Desktop/resource model/landsat data/CAkelpCanopyEnv_2021.nc');
+% NOTE: the data need to be in the same file as this .m script in order for
+% the code below to run
+info = ncinfo('CAkelpCanopyEnv_2021.nc');
 
 %% look at variable names
 % see https://www.mathworks.com/help/matlab/ref/ncinfo.html for information
